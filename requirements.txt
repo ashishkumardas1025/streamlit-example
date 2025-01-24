@@ -1,211 +1,144 @@
 altair
 pandas
 streamlit
-###
-
-from flask import Flask, jsonify, request
+##
 import yaml
 import json
 from typing import Dict, Any
-import random
-from functools import partial
-import boto3
-import os
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify
+from jsonschema import validate
 
-class FlaskAPISimulator:
+class ConfigurationRequestHandler:
     def __init__(self, config_path: str):
         """
-        Initialize the API simulator with config file and AWS Bedrock
-        """
-        self.app = Flask(__name__)
+        Initialize handler with configuration from YAML file
         
-        # Load environment variables
-        load_dotenv()
-        
-        # Initialize AWS Bedrock client
-        self.bedrock_runtime = boto3.client(
-            service_name='bedrock-runtime',
-            region_name=os.getenv('AWS_REGION', 'us-east-1'),
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            aws_session_token=os.getenv('AWS_SESSION_TOKEN')  # Optional, for temporary credentials
-        )
-        
-        self.config = self._load_config(config_path)
-        self._setup_routes()
-    
-    def _load_config(self, config_path: str) -> Dict:
-        """
-        Load and parse the YAML configuration file
+        :param config_path: Path to the YAML configuration file
         """
         with open(config_path, 'r') as file:
-            return yaml.safe_load(file)
+            self.config = yaml.safe_load(file)
+        
+        self.app = Flask(__name__)
+        self._setup_routes()
+    
+    def _validate_request(self, endpoint_config: Dict, request_data: Dict) -> bool:
+        """
+        Validate incoming request against configured schema
+        
+        :param endpoint_config: Endpoint configuration
+        :param request_data: Incoming request data
+        :return: Validation result
+        """
+        try:
+            if 'request_schema' in endpoint_config:
+                validate(instance=request_data, schema=endpoint_config['request_schema'])
+            return True
+        except Exception:
+            return False
+    
+    def _find_matching_endpoint(self, path: str, method: str) -> Dict:
+        """
+        Find matching endpoint configuration
+        
+        :param path: Request path
+        :param method: HTTP method
+        :return: Matching endpoint configuration
+        """
+        for endpoint in self.config.get('endpoints', []):
+            if endpoint['path'] == path and endpoint['method'].upper() == method.upper():
+                return endpoint
+        return {}
     
     def _setup_routes(self):
         """
-        Dynamically create Flask routes based on the YAML configuration
+        Dynamically create routes from configuration
         """
-        for endpoint, config in self.config['endpoints'].items():
-            path = config['path']
-            method = config['method'].upper()
-            
-            # Create endpoint handler with the current config
-            handler = partial(self._handle_request, config)
-            
-            # Register the route with Flask
-            self.app.route(path, methods=[method])(handler)
+        for endpoint in self.config.get('endpoints', []):
+            self.app.route(
+                endpoint['path'], 
+                methods=[endpoint['method']]
+            )(self._handle_request)
     
-    def _generate_dynamic_value(self, field_type: str, field_constraints: Dict = None) -> Any:
+    def _handle_request(self):
         """
-        Generate dynamic values based on field type and constraints
+        Handle incoming requests
+        
+        :return: JSON response with appropriate status
         """
-        if field_constraints is None:
-            field_constraints = {}
-            
-        if field_type == 'string':
-            return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=10))
-        elif field_type == 'integer':
-            min_val = field_constraints.get('minimum', 0)
-            max_val = field_constraints.get('maximum', 100)
-            return random.randint(min_val, max_val)
-        elif field_type == 'number':
-            min_val = field_constraints.get('minimum', 0)
-            max_val = field_constraints.get('maximum', 100)
-            return round(random.uniform(min_val, max_val), 2)
-        elif field_type == 'boolean':
-            return random.choice([True, False])
-        elif field_type == 'array':
-            items = field_constraints.get('items', {})
-            size = random.randint(0, 5)
-            return [self._generate_dynamic_value(items.get('type', 'string'), 
-                                              items.get('constraints', {})) 
-                   for _ in range(size)]
-        elif field_type == 'object':
-            return self._generate_basic_response(field_constraints)
-        return None
+        # Extract request details
+        path = request.path
+        method = request.method
+        request_data = request.get_json() if request.is_json else {}
+        
+        # Find matching endpoint
+        endpoint_config = self._find_matching_endpoint(path, method)
+        
+        if not endpoint_config:
+            return jsonify({"error": "Not Found"}), 404
+        
+        # Validate request
+        if not self._validate_request(endpoint_config, request_data):
+            return jsonify({"error": "Bad Request"}), 400
+        
+        # Return configured response
+        return jsonify(endpoint_config.get('response', {})), 200
+    
+    def run(self, host: str = '0.0.0.0', port: int = 5000):
+        """
+        Run the Flask application
+        
+        :param host: Host address
+        :param port: Port number
+        """
+        self.app.run(host=host, port=port)
 
-    def _generate_response_with_claude(self, schema: Dict) -> Dict:
-        """
-        Use Claude via AWS Bedrock to generate a response matching the schema
-        """
-        prompt = f"""
-        Generate a JSON response following this schema:
-        {json.dumps(schema, indent=2)}
-        
-        The response should:
-        1. Match all required fields and types
-        2. Include realistic but randomized values
-        3. Be properly formatted as JSON
-        
-        Response:
-        """
-        
-        # Prepare the request body for Bedrock
-        body = json.dumps({
-            "prompt": prompt,
-            "max_tokens": 1000,
-            "temperature": 0.7,
-            "anthropic_version": "bedrock-2023-05-31"
-        })
-        
-        try:
-            # Call Bedrock's Claude model
-            response = self.bedrock_runtime.invoke_model(
-                modelId='anthropic.claude-3-sonnet-20240229',  # Use appropriate model ID
-                body=body
-            )
-            
-            # Parse the response
-            response_body = json.loads(response['body'].read())
-            response_content = response_body.get('completion', '')
-            
-            # Extract JSON from Claude's response
-            return json.loads(response_content)
-        except Exception as e:
-            print(f"Error calling Bedrock: {str(e)}")
-            # Fallback to basic schema-based generation
-            return self._generate_basic_response(schema)
-    
-    def _generate_basic_response(self, schema: Dict) -> Dict:
-        """
-        Generate a basic response following the schema without Claude
-        """
-        response = {}
-        properties = schema.get('properties', {})
-        
-        for field_name, field_spec in properties.items():
-            if 'type' in field_spec:
-                response[field_name] = self._generate_dynamic_value(
-                    field_spec['type'],
-                    field_spec.get('constraints', {})
-                )
-        return response
-    
-    def _handle_request(self, endpoint_config: Dict):
-        """
-        Handle incoming requests and generate responses
-        """
-        try:
-            response_schema = endpoint_config['response']['schema']
-            
-            # Use Claude for complex schemas, fallback to basic generation
-            if endpoint_config.get('use_claude', False):
-                response_data = self._generate_response_with_claude(response_schema)
-            else:
-                response_data = self._generate_basic_response(response_schema)
-                
-            return jsonify(response_data)
-                
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    
-    def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
-        """
-        Run the API simulator
-        """
-        self.app.run(host=host, port=port, debug=debug)
-
-# Example usage
-if __name__ == "__main__":
-    # Example configuration
-    config_yaml = """
-    endpoints:
-      get_user:
-        path: '/api/users/<user_id>'
-        method: GET
-        use_claude: true
-        response:
-          schema:
-            type: object
-            properties:
-              id:
-                type: integer
-                constraints:
-                  minimum: 1
-                  maximum: 1000
-              name:
-                type: string
-              email:
-                type: string
-              preferences:
-                type: object
-                properties:
-                  theme:
-                    type: string
-                  notifications:
-                    type: boolean
-              saved_items:
-                type: array
-                items:
-                  type: string
-            required: [id, name, email]
+# Example configuration
+def create_sample_config():
     """
+    Create a sample YAML configuration
+    """
+    config = {
+        'endpoints': [
+            {
+                'path': '/users',
+                'method': 'GET',
+                'request_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'string'}
+                    }
+                },
+                'response': {
+                    'name': 'John Doe',
+                    'email': 'john@example.com'
+                }
+            },
+            {
+                'path': '/users',
+                'method': 'POST',
+                'request_schema': {
+                    'type': 'object',
+                    'properties': {
+                        'name': {'type': 'string'},
+                        'email': {'type': 'string', 'format': 'email'}
+                    },
+                    'required': ['name', 'email']
+                },
+                'response': {
+                    'status': 'User created successfully'
+                }
+            }
+        ]
+    }
     
-    # Save config to a temporary file
-    with open("temp_config.yaml", "w") as f:
-        f.write(config_yaml)
+    with open('config.yaml', 'w') as file:
+        yaml.dump(config, file)
+
+# Main execution
+if __name__ == '__main__':
+    # Create sample configuration
+    create_sample_config()
     
-    # Initialize and run the simulator
-    simulator = FlaskAPISimulator(config_path="temp_config.yaml")
-    simulator.run(debug=True)
+    # Initialize and run handler
+    handler = ConfigurationRequestHandler('config.yaml')
+    handler.run()
