@@ -3,197 +3,155 @@ pandas
 streamlit
 
 from flask import Flask, request, jsonify
-from typing import Dict, Any, Optional, List, Tuple, Callable
 import yaml
-import json
 import random
 import datetime
-import uuid
-import re
-from jsonschema import validate, ValidationError
-from functools import wraps
 import logging
+from typing import Dict, Any
 
-class OpenAPIServer:
-    def __init__(self, yaml_path: str):
+class SimpleOpenAPIServer:
+    def __init__(self, yaml_file: str):
+        """Initialize the server with a YAML file"""
         self.app = Flask(__name__)
-        self.setup_logging()
-        self.load_specification(yaml_path)
-        self.setup_routes()
+        self.logger = self._setup_logger()
+        self.api_spec = self._load_yaml(yaml_file)
+        self._create_routes()
 
-    def setup_logging(self):
-        """Configure logging"""
+    def _setup_logger(self) -> logging.Logger:
+        """Set up basic logging"""
         logging.basicConfig(
             level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format='%(asctime)s - %(levelname)s - %(message)s'
         )
-        self.logger = logging.getLogger(__name__)
+        return logging.getLogger(__name__)
 
-    def load_specification(self, yaml_path: str):
-        """Load and parse OpenAPI specification"""
+    def _load_yaml(self, yaml_file: str) -> Dict:
+        """Load and parse YAML file"""
         try:
-            with open(yaml_path, 'r') as file:
-                self.spec = yaml.safe_load(file)
-            self.logger.info(f"Successfully loaded OpenAPI specification from {yaml_path}")
+            with open(yaml_file, 'r') as file:
+                return yaml.safe_load(file)
         except Exception as e:
-            self.logger.error(f"Failed to load specification: {str(e)}")
+            self.logger.error(f"Failed to load YAML file: {e}")
             raise
 
-    def validate_request(self, schema: Dict) -> Callable:
-        """Decorator for request validation"""
-        def decorator(f):
-            @wraps(f)
-            def wrapper(*args, **kwargs):
-                try:
-                    if request.is_json:
-                        data = request.get_json()
-                    elif request.form:
-                        data = dict(request.form)
-                    else:
-                        data = dict(request.args)
-
-                    if schema:
-                        validate(instance=data, schema=schema)
-                    return f(*args, **kwargs)
-                except ValidationError as e:
-                    return jsonify({"error": "Validation failed", "details": str(e)}), 400
-                except Exception as e:
-                    return jsonify({"error": str(e)}), 500
-            return wrapper
-        return decorator
-
-    def generate_mock_response(self, schema: Dict) -> Any:
-        """Generate mock response based on schema"""
+    def _generate_mock_data(self, schema: Dict) -> Any:
+        """Generate mock data based on schema type"""
         if not schema:
             return None
 
         schema_type = schema.get('type', 'object')
+
+        # Handle different types
+        type_handlers = {
+            'string': self._handle_string,
+            'integer': self._handle_integer,
+            'number': self._handle_number,
+            'boolean': self._handle_boolean,
+            'array': self._handle_array,
+            'object': self._handle_object
+        }
+
+        handler = type_handlers.get(schema_type, lambda x: None)
+        return handler(schema)
+
+    def _handle_string(self, schema: Dict) -> str:
+        """Handle string type schemas"""
+        format_type = schema.get('format', '')
         
-        if schema_type == 'object':
-            result = {}
-            for prop, prop_schema in schema.get('properties', {}).items():
-                result[prop] = self.generate_mock_response(prop_schema)
-            return result
+        format_handlers = {
+            'date-time': lambda: datetime.datetime.now().isoformat(),
+            'date': lambda: datetime.date.today().isoformat(),
+            'email': lambda: f"user{random.randint(1,100)}@example.com",
+            'uri': lambda: f"https://example.com/resource/{random.randint(1,100)}"
+        }
 
-        elif schema_type == 'array':
-            items_schema = schema.get('items', {})
-            min_items = schema.get('minItems', 1)
-            max_items = schema.get('maxItems', 5)
-            num_items = random.randint(min_items, max_items)
-            return [self.generate_mock_response(items_schema) for _ in range(num_items)]
+        return format_handlers.get(format_type, lambda: f"sample_{random.randint(1,1000)}")()
 
-        elif schema_type == 'string':
-            format_type = schema.get('format', '')
-            if format_type == 'date-time':
-                return datetime.datetime.now().isoformat()
-            elif format_type == 'date':
-                return datetime.date.today().isoformat()
-            elif format_type == 'email':
-                return f"user{random.randint(1,1000)}@example.com"
-            elif format_type == 'uuid':
-                return str(uuid.uuid4())
-            elif format_type == 'uri':
-                return f"https://example.com/resource/{random.randint(1,1000)}"
-            return f"sample_string_{random.randint(1,1000)}"
+    def _handle_integer(self, schema: Dict) -> int:
+        """Handle integer type schemas"""
+        min_val = schema.get('minimum', 1)
+        max_val = schema.get('maximum', 100)
+        return random.randint(min_val, max_val)
 
-        elif schema_type == 'integer':
-            minimum = schema.get('minimum', 0)
-            maximum = schema.get('maximum', 1000)
-            return random.randint(minimum, maximum)
+    def _handle_number(self, schema: Dict) -> float:
+        """Handle number type schemas"""
+        min_val = schema.get('minimum', 0.0)
+        max_val = schema.get('maximum', 100.0)
+        return round(random.uniform(min_val, max_val), 2)
 
-        elif schema_type == 'number':
-            minimum = schema.get('minimum', 0.0)
-            maximum = schema.get('maximum', 1000.0)
-            return round(random.uniform(minimum, maximum), 2)
+    def _handle_boolean(self, schema: Dict) -> bool:
+        """Handle boolean type schemas"""
+        return random.choice([True, False])
 
-        elif schema_type == 'boolean':
-            return random.choice([True, False])
+    def _handle_array(self, schema: Dict) -> list:
+        """Handle array type schemas"""
+        items_schema = schema.get('items', {})
+        return [self._generate_mock_data(items_schema) for _ in range(2)]  # Generate 2 items
 
-        return None
+    def _handle_object(self, schema: Dict) -> Dict:
+        """Handle object type schemas"""
+        properties = schema.get('properties', {})
+        return {
+            prop_name: self._generate_mock_data(prop_schema)
+            for prop_name, prop_schema in properties.items()
+        }
 
-    def create_endpoint_handler(self, path: str, method: str, operation: Dict) -> Callable:
-        """Create handler function for endpoint"""
-        def handler(**kwargs):
+    def _create_route_handler(self, path: str, method: str, operation: Dict):
+        """Create a handler function for a route"""
+        def handler(*args, **kwargs):
             try:
                 # Get response schema
-                responses = operation.get('responses', {})
-                success_code = next((code for code in responses.keys() 
-                                  if str(code).startswith('2')), '200')
-                response_schema = (responses.get(success_code, {})
-                                .get('content', {})
-                                .get('application/json', {})
-                                .get('schema', {}))
+                response_schema = (
+                    operation.get('responses', {})
+                    .get('200', {})
+                    .get('content', {})
+                    .get('application/json', {})
+                    .get('schema', {})
+                )
 
                 # Generate mock response
-                response_data = self.generate_mock_response(response_schema)
-                return jsonify(response_data), int(success_code)
+                response = self._generate_mock_data(response_schema)
+                return jsonify(response), 200
 
             except Exception as e:
-                self.logger.error(f"Error handling request: {str(e)}")
+                self.logger.error(f"Error handling request: {e}")
                 return jsonify({"error": str(e)}), 500
 
         return handler
 
-    def setup_routes(self):
-        """Set up Flask routes based on OpenAPI specification"""
-        paths = self.spec.get('paths', {})
-        
-        for path, path_item in paths.items():
-            # Convert path parameters from OpenAPI to Flask format
-            flask_path = re.sub(r'{([^}]+)}', r'<\1>', path)
-            
-            for method, operation in path_item.items():
+    def _create_routes(self):
+        """Create Flask routes from YAML specification"""
+        paths = self.api_spec.get('paths', {})
+
+        for path, methods in paths.items():
+            # Convert path parameters from {param} to <param>
+            flask_path = path.replace('{', '<').replace('}', '>')
+
+            for method, operation in methods.items():
                 if method.lower() not in ['get', 'post', 'put', 'delete', 'patch']:
                     continue
 
-                # Get request schema
-                request_schema = (operation.get('requestBody', {})
-                               .get('content', {})
-                               .get('application/json', {})
-                               .get('schema', {}))
-
-                # Create handler with validation
-                handler = self.validate_request(request_schema)(
-                    self.create_endpoint_handler(path, method, operation)
-                )
-
-                # Register route
+                handler = self._create_route_handler(path, method, operation)
                 self.app.route(flask_path, methods=[method.upper()])(handler)
-                self.logger.info(f"Registered {method.upper()} {flask_path}")
+                self.logger.info(f"Created route: {method.upper()} {path}")
 
-    def add_error_handlers(self):
-        """Add generic error handlers"""
-        @self.app.errorhandler(404)
-        def not_found(e):
-            return jsonify({"error": "Not found"}), 404
+    def run(self, host: str = 'localhost', port: int = 5000):
+        """Run the Flask server"""
+        self.logger.info(f"Starting server on {host}:{port}")
+        self.app.run(host=host, port=port, debug=True)
 
-        @self.app.errorhandler(405)
-        def method_not_allowed(e):
-            return jsonify({"error": "Method not allowed"}), 405
-
-        @self.app.errorhandler(500)
-        def server_error(e):
-            return jsonify({"error": "Internal server error"}), 500
-
-    def run(self, host: str = '0.0.0.0', port: int = 5000, debug: bool = True):
-        """Run the Flask application"""
-        self.add_error_handlers()
-        self.app.run(host=host, port=port, debug=debug)
-
-def create_server(yaml_path: str) -> OpenAPIServer:
-    """Create and configure OpenAPI server"""
-    return OpenAPIServer(yaml_path)
+# Example usage
+def start_server(yaml_file: str, port: int = 5000):
+    """Start the API server with the given YAML file"""
+    server = SimpleOpenAPIServer(yaml_file)
+    server.run(port=port)
 
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='Start OpenAPI mock server')
-    parser.add_argument('--yaml', required=True, help='Path to OpenAPI YAML file')
+    parser = argparse.ArgumentParser(description='Start a simple OpenAPI mock server')
+    parser.add_argument('yaml_file', help='Path to OpenAPI YAML file')
     parser.add_argument('--port', type=int, default=5000, help='Port to run server on')
-    parser.add_argument('--host', default='0.0.0.0', help='Host to run server on')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     
     args = parser.parse_args()
-    
-    server = create_server(args.yaml)
-    server.run(host=args.host, port=args.port, debug=args.debug)
+    start_server(args.yaml_file, args.port)
