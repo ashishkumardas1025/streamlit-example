@@ -2,144 +2,166 @@ altair
 pandas
 streamlit
 
-from flask import Flask, request, jsonify
+openapi: 3.0.0
+info:
+  title: Book API
+  version: 1.0.0
+  description: A simple API to manage books.
+servers:
+  - url: http://localhost:5000/api
+
+paths:
+  /books:
+    get:
+      summary: Get all books
+      responses:
+        '200':
+          description: List of books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+    post:
+      summary: Add a new book
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Book'
+      responses:
+        '201':
+          description: Book created
+
+  /books/{id}:
+    get:
+      summary: Get a book by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: A single book
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          description: Book not found
+    put:
+      summary: Update a book by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Book'
+      responses:
+        '200':
+          description: Book updated
+    delete:
+      summary: Delete a book by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Book deleted
+
+components:
+  schemas:
+    Book:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+
 import yaml
-import json
-import random
-import datetime
-from typing import Dict, Any
+from flask import Flask, jsonify, request
+from flask_restful import Api, Resource
+import os
 
-class SimpleYAMLServer:
-    def __init__(self, yaml_file: str):
-        """Initialize server with YAML file"""
-        self.app = Flask(__name__)
-        self.load_yaml(yaml_file)
-        self.setup_routes()
+app = Flask(__name__)
+api = Api(app)
 
-    def load_yaml(self, yaml_file: str):
-        """Load YAML configuration file"""
-        try:
-            with open(yaml_file, 'r') as file:
-                self.config = yaml.safe_load(file)
-            print(f"Successfully loaded {yaml_file}")
-        except Exception as e:
-            print(f"Error loading YAML: {str(e)}")
-            raise
 
-    def generate_mock_data(self, schema: Dict) -> Any:
-        """Generate mock data based on schema type"""
-        if not schema or not isinstance(schema, dict):
-            return None
+def load_openapi_spec(file_path):
+    """Load OpenAPI specification from a YAML file."""
+    with open(file_path, 'r') as file:
+        return yaml.safe_load(file)
 
-        schema_type = schema.get('type', 'object')
 
-        if schema_type == 'object':
-            return {
-                key: self.generate_mock_data(value) 
-                for key, value in schema.get('properties', {}).items()
-            }
-
-        elif schema_type == 'array':
-            items = schema.get('items', {})
-            return [self.generate_mock_data(items) for _ in range(2)]  # Generate 2 items
-
-        elif schema_type == 'string':
-            if schema.get('format') == 'date-time':
-                return datetime.datetime.now().isoformat()
-            return "sample_string"
-
-        elif schema_type == 'integer':
-            return 123
-
-        elif schema_type == 'boolean':
-            return True
-
+def generate_sample_response(schema):
+    """
+    Generate a sample response based on a schema.
+    For simplicity, handle basic types (string, integer, boolean, etc.).
+    """
+    if schema.get("type") == "object":
+        return {key: generate_sample_response(value) for key, value in schema.get("properties", {}).items()}
+    elif schema.get("type") == "array":
+        return [generate_sample_response(schema.get("items", {}))]
+    elif schema.get("type") == "string":
+        return "string_example"
+    elif schema.get("type") == "integer":
+        return 123
+    elif schema.get("type") == "boolean":
+        return True
+    else:
         return None
 
-    def setup_routes(self):
-        """Set up Flask routes based on YAML paths"""
-        
-        @self.app.route('/service-product/e-transfer-service/e-transfer-account-alias-registrations', methods=['GET'])
-        def get_registrations():
-            """Handle GET request"""
-            try:
-                # Get schema from YAML config
-                schema = (self.config.get('paths', {})
-                         .get('/service-product/e-transfer-service/e-transfer-account-alias-registrations', {})
-                         .get('get', {})
-                         .get('responses', {})
-                         .get('200', {})
-                         .get('content', {})
-                         .get('application/json', {})
-                         .get('schema', {}))
-                
-                # Generate mock response
-                response = self.generate_mock_data(schema)
-                return jsonify(response), 200
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
 
-        @self.app.route('/service-product/e-transfer-service/e-transfer-account-alias-registrations', methods=['POST'])
-        def create_registration():
-            """Handle POST request"""
-            try:
-                request_data = request.get_json()
-                
-                # Get response schema from YAML config
-                schema = (self.config.get('paths', {})
-                         .get('/service-product/e-transfer-service/e-transfer-account-alias-registrations', {})
-                         .get('post', {})
-                         .get('responses', {})
-                         .get('200', {})
-                         .get('content', {})
-                         .get('application/json', {})
-                         .get('schema', {}))
-                
-                # Generate mock response
-                response = self.generate_mock_data(schema)
-                return jsonify(response), 201
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+def create_endpoint(path, methods, responses):
+    """
+    Create a Flask endpoint dynamically.
+    :param path: API path (e.g., /books/{id})
+    :param methods: List of HTTP methods (e.g., GET, POST)
+    :param responses: Response schema from the OpenAPI spec
+    """
+    class DynamicResource(Resource):
+        def dispatch_request(self, *args, **kwargs):
+            # Mimic the response from the first response in the schema
+            status_code = list(responses.keys())[0]
+            response_schema = responses[status_code].get("content", {}).get("application/json", {}).get("schema", {})
+            sample_response = generate_sample_response(response_schema)
+            return jsonify(sample_response)
 
-        @self.app.route('/service-product/e-transfer-service/e-transfer-account-alias-registrations/<string:alias_id>', methods=['PUT'])
-        def update_registration(alias_id):
-            """Handle PUT request"""
-            try:
-                request_data = request.get_json()
-                
-                # Get response schema from YAML config
-                schema = (self.config.get('paths', {})
-                         .get('/service-product/e-transfer-service/e-transfer-account-alias-registrations/{alias_id}', {})
-                         .get('put', {})
-                         .get('responses', {})
-                         .get('200', {})
-                         .get('content', {})
-                         .get('application/json', {})
-                         .get('schema', {}))
-                
-                # Generate mock response
-                response = self.generate_mock_data(schema)
-                return jsonify(response), 200
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
+    # Replace path parameters (e.g., {id}) with Flask's syntax (<id>)
+    flask_path = path.replace("{", "<").replace("}", ">")
+    api.add_resource(DynamicResource, flask_path, methods=methods)
 
-        @self.app.route('/service-product/e-transfer-service/e-transfer-account-alias-registrations/<string:alias_id>', methods=['DELETE'])
-        def delete_registration(alias_id):
-            """Handle DELETE request"""
-            try:
-                return jsonify({
-                    "message": f"Successfully deleted registration {alias_id}",
-                    "success": True
-                }), 200
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
 
-    def run(self, host='0.0.0.0', port=5000):
-        """Run the Flask server"""
-        self.app.run(host=host, port=port, debug=True)
+def setup_routes_from_spec(spec):
+    """Setup all routes based on the OpenAPI spec."""
+    for path, operations in spec.get("paths", {}).items():
+        for method, details in operations.items():
+            responses = details.get("responses", {})
+            create_endpoint(path, [method.upper()], responses)
 
-# Main execution
-if __name__ == '__main__':
-    # Create and run server
-    server = SimpleYAMLServer('etransferr.yaml')
-    server.run()
+
+# Load OpenAPI spec and setup routes
+openapi_spec_path = os.getenv("OPENAPI_SPEC_PATH", "openapi.yaml")
+openapi_spec = load_openapi_spec(openapi_spec_path)
+setup_routes_from_spec(openapi_spec)
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
