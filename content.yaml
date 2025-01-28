@@ -1,109 +1,133 @@
 openapi: 3.0.0
 info:
-  title: Pet API
-  description: A simple API to manage pets.
+  title: Payment API
+  description: API for processing and managing payments
   version: 1.0.0
+
 servers:
-  - url: http://localhost:5000
+  - url: https://api.example.com/v1
+
 paths:
-  /pets:
+  /payments:
     get:
-      summary: Get all pets
-      operationId: getPets
+      summary: List all payments
       responses:
         '200':
-          description: A list of pets
+          description: A list of payments
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Pet'
+                  $ref: '#/components/schemas/Payment'
+
     post:
-      summary: Add a new pet
-      operationId: addPet
+      summary: Create a new payment
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Pet'
+              $ref: '#/components/schemas/Payment'
       responses:
         '201':
-          description: Pet created
+          description: Payment created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Pet'
-  /pets/{id}:
+                $ref: '#/components/schemas/PaymentResponse'
+
+  /payments/{paymentId}:
     get:
-      summary: Get a pet by ID
-      operationId: getPetById
+      summary: Get payment by ID
       parameters:
-        - name: id
+        - name: paymentId
           in: path
           required: true
           schema:
-            type: integer
+            type: string
       responses:
         '200':
-          description: A single pet
+          description: Payment retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Pet'
-        '404':
-          description: Pet not found
+                $ref: '#/components/schemas/Payment'
+
     put:
-      summary: Update a pet by ID
-      operationId: updatePet
+      summary: Update a payment by ID
       parameters:
-        - name: id
+        - name: paymentId
           in: path
           required: true
           schema:
-            type: integer
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Pet'
+              $ref: '#/components/schemas/Payment'
       responses:
         '200':
-          description: Pet updated
+          description: Payment updated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Pet'
-        '404':
-          description: Pet not found
+                $ref: '#/components/schemas/PaymentResponse'
+
     delete:
-      summary: Delete a pet by ID
-      operationId: deletePet
+      summary: Delete a payment by ID
       parameters:
-        - name: id
+        - name: paymentId
           in: path
           required: true
           schema:
-            type: integer
+            type: string
       responses:
-        '200':
-          description: Pet deleted
+        '204':
+          description: Payment deleted
+
 components:
   schemas:
-    Pet:
+    Payment:
       type: object
       properties:
         id:
-          type: integer
-          description: The pet ID
-        name:
           type: string
-          description: The name of the pet
-        species:
+        amount:
+          type: number
+          format: float
+        currency:
           type: string
-          description: The species of the pet
-      required:
-        - name
-        - species
+        method:
+          type: string
+        cardNumber:
+          type: string
+        cardExpiry:
+          type: string
+        cardCVC:
+          type: string
+
+    PaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          type: string
+
+    PaymentStatus:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          type: string
+        amount:
+          type: number
+          format: float
+        currency:
+          type: string
+        method:
+          type: string
