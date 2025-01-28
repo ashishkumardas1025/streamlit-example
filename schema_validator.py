@@ -7,27 +7,37 @@ from typing import Dict, Any
 class GenericAPIHandler:
     """Handles CRUD operations for any entity dynamically."""
     def __init__(self):
-        self.store: Dict[str, Dict[int, Any]] = {}
-        self.id_counters: Dict[str, int] = {}
+        self.store: Dict[str, Dict[str, Any]] = {}
+        self.id_fields: Dict[str, str] = {}  # Stores the ID field for each entity type
 
-    def get_entity_type(self, path: str) -> str:
-        """Extract entity type from the path."""
-        return path.split('/')[1] if len(path.split('/')) > 1 else 'default'
-
-    def get_or_create_store(self, entity_type: str) -> Dict[int, Any]:
+    def get_or_create_store(self, entity_type: str) -> Dict[str, Any]:
         """Get or create a store for the entity type."""
         if entity_type not in self.store:
             self.store[entity_type] = {}
-            self.id_counters[entity_type] = 1
         return self.store[entity_type]
 
-    def create(self, entity_type: str, data: Dict) -> tuple:
+    def get_id_field(self, entity_type: str, schema: Dict) -> str:
+        """Determine the ID field for the entity based on the OpenAPI schema."""
+        if entity_type not in self.id_fields:
+            properties = schema.get('properties', {})
+            # Default to 'id' if available, otherwise pick the first property
+            self.id_fields[entity_type] = next((k for k in properties if k.lower() == 'id'), list(properties.keys())[0])
+        return self.id_fields[entity_type]
+
+    def create(self, entity_type: str, data: Dict, schema: Dict) -> tuple:
         """Create a new entity."""
         store = self.get_or_create_store(entity_type)
-        entity_id = self.id_counters[entity_type]
-        data['id'] = entity_id
+        id_field = self.get_id_field(entity_type, schema)
+
+        # Check for duplicate ID
+        if id_field in data and str(data[id_field]) in store:
+            return {"error": f"{entity_type} with {id_field}={data[id_field]} already exists"}, 400
+
+        if id_field not in data:
+            return {"error": f"Missing required field: {id_field}"}, 400
+
+        entity_id = str(data[id_field])
         store[entity_id] = data
-        self.id_counters[entity_type] += 1
         return data, 201
 
     def get_all(self, entity_type: str) -> tuple:
@@ -35,28 +45,33 @@ class GenericAPIHandler:
         store = self.get_or_create_store(entity_type)
         return list(store.values()), 200
 
-    def get_one(self, entity_type: str, entity_id: int) -> tuple:
+    def get_one(self, entity_type: str, entity_id: str) -> tuple:
         """Get a single entity."""
         store = self.get_or_create_store(entity_type)
         if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
+            return {"error": f"{entity_type} with ID {entity_id} not found"}, 404
         return store[entity_id], 200
 
-    def update(self, entity_type: str, entity_id: int, data: Dict) -> tuple:
+    def update(self, entity_type: str, entity_id: str, data: Dict, schema: Dict) -> tuple:
         """Update an existing entity."""
         store = self.get_or_create_store(entity_type)
+        id_field = self.get_id_field(entity_type, schema)
+
         if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
-        data['id'] = entity_id
+            return {"error": f"{entity_type} with ID {entity_id} not found"}, 404
+
+        # Ensure ID consistency in the update
+        data[id_field] = entity_id
         store[entity_id] = data
         return data, 200
 
-    def delete(self, entity_type: str, entity_id: int) -> tuple:
+    def delete(self, entity_type: str, entity_id: str) -> tuple:
         """Delete an entity."""
         store = self.get_or_create_store(entity_type)
         if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
-        return store.pop(entity_id), 204
+            return {"error": f"{entity_type} with ID {entity_id} not found"}, 404
+        del store[entity_id]
+        return {}, 204
 
 
 class OpenAPIFlask:
@@ -94,43 +109,41 @@ class OpenAPIFlask:
         def route_handler(**kwargs):
             entity_type = path.split('/')[1]
             try:
+                # Extract the schema for requestBody
+                schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
+
                 # Handle GET for a single entity (with ID)
                 if method == 'get' and 'id' in kwargs:
-                    entity_id = kwargs['id']
-                    return jsonify(self.handler.get_one(entity_type, int(entity_id))[0]), 200
-                
+                    return jsonify(self.handler.get_one(entity_type, kwargs['id'])[0]), 200
+
                 # Handle GET for all entities
                 elif method == 'get':
                     return jsonify(self.handler.get_all(entity_type)[0]), 200
-                
+
                 # Handle POST (create)
                 elif method == 'post':
                     data = request.get_json()
-                    schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    return jsonify(self.handler.create(entity_type, data)[0]), 201
-                
+                    return jsonify(self.handler.create(entity_type, data, schema)[0]), 201
+
                 # Handle PUT (update)
                 elif method == 'put':
                     if 'id' not in kwargs:
                         return jsonify({"error": "ID is required for update operation"}), 400
                     data = request.get_json()
-                    entity_id = kwargs['id']
-                    schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    return jsonify(self.handler.update(entity_type, int(entity_id), data)[0]), 200
-                
+                    return jsonify(self.handler.update(entity_type, kwargs['id'], data, schema)[0]), 200
+
                 # Handle DELETE
                 elif method == 'delete':
                     if 'id' not in kwargs:
                         return jsonify({"error": "ID is required for delete operation"}), 400
-                    entity_id = kwargs['id']
-                    return jsonify(self.handler.delete(entity_type, int(entity_id))[0]), 204
-                
+                    return jsonify(self.handler.delete(entity_type, kwargs['id'])[0]), 204
+
                 # Method not supported
                 else:
                     return jsonify({"error": "Method not supported"}), 405
-            
+
             except Exception as e:
                 return jsonify({"error": str(e)}), 400
 
