@@ -1,119 +1,109 @@
-openapi: 3.0.3
+openapi: 3.0.0
 info:
-  title: Sample REST APIs using Flask, OpenAPI and Connexion
-  description: Sample REST APIs using Flask, OpenAPI and Connexion
-  version: "1.0.0"
+  title: Pet API
+  description: A simple API to manage pets.
+  version: 1.0.0
 servers:
   - url: http://localhost:5000
-    description: Rest Server showing Swagger and Connexion capability
 paths:
-  /item:
+  /pets:
     get:
-      operationId: item.getAll
-      tags:
-        - Item
-      summary: Returns a list of items.
-      description: Returns a list of items.
+      summary: Get all pets
+      operationId: getPets
       responses:
-        "200": # status code
-          description: Return the entire list of items.
+        '200':
+          description: A list of pets
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Item"
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
     post:
-      operationId: item.create
-      tags:
-        - Item
-      summary: Create a new Item
-      description: Create a new Item
+      summary: Add a new pet
+      operationId: addPet
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Item"
+              $ref: '#/components/schemas/Pet'
       responses:
-        "201":
-          description: Item Created successfully
-  /item/{id}:
+        '201':
+          description: Pet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /pets/{id}:
     get:
-      operationId: item.get
-      tags:
-        - Item
-      summary: Return an Item with given ID
-      description: Return an Item with given ID
+      summary: Get a pet by ID
+      operationId: getPetById
       parameters:
         - name: id
           in: path
-          description: Item ID
           required: true
           schema:
             type: integer
-            format: int64
       responses:
-        "200": # status code
-          description: Return an Item with given ID
+        '200':
+          description: A single pet
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Item"
-    delete:
-      operationId: item.delete
-      tags:
-        - Item
-      summary: Delete an Item with given ID
-      description: Delete an Item with given ID
-      parameters:
-        - name: id
-          in: path
-          description: Item ID
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        "200": # status code
-          description: Deleted an Item with given ID
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Item"
+                $ref: '#/components/schemas/Pet'
+        '404':
+          description: Pet not found
     put:
-      operationId: item.update
-      tags:
-        - Item
-      summary: Update an Item with given ID
-      description: Update an Item with given ID
+      summary: Update a pet by ID
+      operationId: updatePet
       parameters:
         - name: id
           in: path
-          description: Item ID
           required: true
           schema:
             type: integer
-            format: int64
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Item"
+              $ref: '#/components/schemas/Pet'
       responses:
-        "200": # status code
-          description: Updated an Item with given ID
+        '200':
+          description: Pet updated
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Item"
-
+                $ref: '#/components/schemas/Pet'
+        '404':
+          description: Pet not found
+    delete:
+      summary: Delete a pet by ID
+      operationId: deletePet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pet deleted
 components:
   schemas:
-    Item:
+    Pet:
       type: object
       properties:
         id:
           type: integer
-          format: int64
+          description: The pet ID
         name:
           type: string
-        price:
-          type: number
+          description: The name of the pet
+        species:
+          type: string
+          description: The species of the pet
+      required:
+        - name
+        - species
