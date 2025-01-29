@@ -1,63 +1,63 @@
 openapi: 3.0.0
 info:
-  title: Payment API
-  description: API for processing and managing payments
+  title: Pet API
+  description: API for managing pets, their owners, and vaccinations
   version: 1.0.0
 
 servers:
-  - url: https://api.example.com/v1
+  - url: https://api.petstore.com/v1
 
 paths:
-  /payments:
+  /pets:
     get:
-      summary: List all payments
+      summary: List all pets
       responses:
         '200':
-          description: A list of payments
+          description: A list of pets
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Payment'
+                  $ref: '#/components/schemas/Pet'
 
     post:
-      summary: Create a new payment
+      summary: Add a new pet
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Payment'
+              $ref: '#/components/schemas/Pet'
       responses:
         '201':
-          description: Payment created
+          description: Pet created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaymentResponse'
+                $ref: '#/components/schemas/PetResponse'
 
-  /payments/{paymentId}:
+  /pets/{petId}:
     get:
-      summary: Get payment by ID
+      summary: Get pet details by ID
       parameters:
-        - name: paymentId
+        - name: petId
           in: path
           required: true
           schema:
             type: string
       responses:
         '200':
-          description: Payment retrieved
+          description: Pet details retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Payment'
+                $ref: '#/components/schemas/Pet'
 
     put:
-      summary: Update a payment by ID
+      summary: Update pet information
       parameters:
-        - name: paymentId
+        - name: petId
           in: path
           required: true
           schema:
@@ -67,67 +67,167 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Payment'
+              $ref: '#/components/schemas/Pet'
       responses:
         '200':
-          description: Payment updated
+          description: Pet updated successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaymentResponse'
+                $ref: '#/components/schemas/PetResponse'
 
     delete:
-      summary: Delete a payment by ID
+      summary: Delete a pet by ID
       parameters:
-        - name: paymentId
+        - name: petId
           in: path
           required: true
           schema:
             type: string
       responses:
         '204':
-          description: Payment deleted
+          description: Pet deleted successfully
+
+  /pets/{petId}/owner:
+    get:
+      summary: Get pet's owner details
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Owner details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Owner'
+
+    patch:
+      summary: Update pet owner details
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Owner'
+      responses:
+        '200':
+          description: Owner updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Owner'
+
+  /pets/{petId}/vaccination:
+    get:
+      summary: Get vaccination records of a pet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vaccination details retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Vaccination'
+
+    post:
+      summary: Add a vaccination record for a pet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Vaccination'
+      responses:
+        '201':
+          description: Vaccination record added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaccinationResponse'
 
 components:
   schemas:
-    Payment:
+    Pet:
       type: object
       properties:
         id:
           type: string
-        amount:
-          type: number
-          format: float
-        currency:
+        name:
           type: string
-        method:
+        age:
+          type: integer
+        breed:
           type: string
-        cardNumber:
+        species:
           type: string
-        cardExpiry:
+        ownerId:
           type: string
-        cardCVC:
-          type: string
+        vaccinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Vaccination'
 
-    PaymentResponse:
+    PetResponse:
       type: object
       properties:
-        paymentId:
+        petId:
           type: string
         status:
           type: string
 
-    PaymentStatus:
+    Owner:
       type: object
       properties:
-        paymentId:
+        id:
+          type: string
+        name:
+          type: string
+        contact:
+          type: string
+        address:
+          type: string
+
+    Vaccination:
+      type: object
+      properties:
+        id:
+          type: string
+        vaccineName:
+          type: string
+        date:
+          type: string
+          format: date
+        nextDueDate:
+          type: string
+          format: date
+
+    VaccinationResponse:
+      type: object
+      properties:
+        vaccinationId:
           type: string
         status:
-          type: string
-        amount:
-          type: number
-          format: float
-        currency:
-          type: string
-        method:
           type: string
