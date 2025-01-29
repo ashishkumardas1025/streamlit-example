@@ -61,10 +61,10 @@ class SchemaValidator:
 
 class GenericAPIHandler:
     """Handles CRUD operations for any entity dynamically."""
-    def __init__(self):
+    def __init__(self, logger):
         self.store: Dict[str, Dict[int, Any]] = {}
         self.id_counters: Dict[str, int] = {}
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     def get_entity_type(self, path: str) -> str:
         """Extract entity type from the path."""
@@ -150,20 +150,38 @@ class GenericAPIHandler:
 class OpenAPIFlask:
     """Dynamic Flask application based on OpenAPI specifications."""
     def __init__(self, spec_files: Union[str, List[str]]):
+        # Initialize logging first
+        self.setup_logging()
+        
         self.app = Flask(__name__)
-        self.handler = GenericAPIHandler()
+        self.handler = GenericAPIHandler(self.logger)  # Pass logger to handler
         self.specs = {}
         self.load_specs(spec_files)
         self.register_routes()
-        self.setup_logging()
 
     def setup_logging(self):
         """Configure logging for the application."""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
+        # Create a logger for this class
         self.logger = logging.getLogger(__name__)
+        
+        # Configure logging if it hasn't been configured yet
+        if not self.logger.handlers:
+            # Create console handler
+            handler = logging.StreamHandler()
+            
+            # Create formatter
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            
+            # Add formatter to handler
+            handler.setFormatter(formatter)
+            
+            # Add handler to logger
+            self.logger.addHandler(handler)
+            
+            # Set level
+            self.logger.setLevel(logging.INFO)
 
     def load_specs(self, spec_files: Union[str, List[str]]) -> None:
         """Load and parse multiple OpenAPI specifications."""
