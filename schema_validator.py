@@ -21,7 +21,6 @@ class DynamicResponseGenerator:
         self.cache: Dict[str, Any] = {}
 
     def generate_example_value(self, schema: Dict[str, Any]) -> Any:
-        """Generate example value based on schema type with improved type handling."""
         if not isinstance(schema, dict):
             return None
 
@@ -72,7 +71,6 @@ class DynamicResponseGenerator:
         return None
 
     def generate_object_example(self, schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate example object based on schema with required fields handling."""
         result = {}
         properties = schema.get('properties', {})
         required_fields = schema.get('required', [])
@@ -90,14 +88,16 @@ class DynamicAPIHandler:
 
     def get_store_key(self, path: str) -> str:
         """Generate a unique key for each path's data store."""
-        return re.sub(r'{[^}]+}', '', path).strip('/')
+        # Remove path parameters and clean the path
+        clean_path = re.sub(r'{[^}]+}', '', path).strip('/')
+        return clean_path or 'root'
 
-    def get_path_params(self, path: str) -> list:
-        """Extract all path parameters."""
-        return re.findall(r'{([^}]+)}', path)
+    def get_path_param_name(self, path: str) -> Optional[str]:
+        """Extract the path parameter name if it exists."""
+        match = re.search(r'{([^}]+)}', path)
+        return match.group(1) if match else None
 
     def validate_request_data(self, data: Dict[str, Any], schema: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-        """Basic request data validation against schema."""
         if not schema:
             return True, None
             
@@ -111,21 +111,10 @@ class DynamicAPIHandler:
             if field not in data:
                 return False, f"Missing required field: {field}"
                 
-        for field, value in data.items():
-            if field in properties:
-                field_type = properties[field].get('type')
-                if field_type == 'string' and not isinstance(value, str):
-                    return False, f"Field {field} must be a string"
-                elif field_type == 'number' and not isinstance(value, (int, float)):
-                    return False, f"Field {field} must be a number"
-                elif field_type == 'boolean' and not isinstance(value, bool):
-                    return False, f"Field {field} must be a boolean"
-                    
         return True, None
 
     async def handle_request(self, path: str, method: str, request_data: Optional[Dict[str, Any]] = None, 
                            path_params: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], int]:
-        """Handle API request with improved error handling and validation."""
         try:
             store_key = self.get_store_key(path)
             if store_key not in self.data_stores:
@@ -133,6 +122,7 @@ class DynamicAPIHandler:
 
             store = self.data_stores[store_key]
             request_schema = self.get_request_schema(path, method)
+            param_name = self.get_path_param_name(path)
             
             if request_data and request_schema:
                 is_valid, error = self.validate_request_data(request_data, request_schema)
@@ -140,37 +130,39 @@ class DynamicAPIHandler:
                     return {"error": error}, 400
 
             if method.lower() == 'get':
-                if path_params and path_params.get('id'):
-                    record = store.get(path_params['id'])
-                    if not record:
+                # Handle GET request with or without ID
+                if path_params and param_name and path_params.get(param_name):
+                    record_id = path_params[param_name]
+                    if record_id not in store:
                         return {"error": "Record not found"}, 404
-                    return record, 200
+                    return store[record_id], 200
                 return {"items": list(store.values())}, 200
 
             elif method.lower() == 'post':
+                # Handle POST request
                 new_id = str(uuid.uuid4())
-                if request_data:
-                    request_data['id'] = new_id
-                else:
-                    request_data = {'id': new_id}
-                store[new_id] = request_data
-                return request_data, 201
+                new_record = request_data if request_data else {}
+                new_record['id'] = new_id
+                store[new_id] = new_record
+                return new_record, 201
 
             elif method.lower() == 'put':
-                if not path_params or 'id' not in path_params:
+                # Handle PUT request
+                if not path_params or not param_name or path_params.get(param_name) is None:
                     return {"error": "ID is required for update"}, 400
-                record_id = path_params['id']
+                record_id = path_params[param_name]
                 if record_id not in store:
                     return {"error": "Record not found"}, 404
-                if request_data:
-                    request_data['id'] = record_id
-                    store[record_id] = request_data
+                updated_record = request_data if request_data else {}
+                updated_record['id'] = record_id
+                store[record_id] = updated_record
                 return store[record_id], 200
 
             elif method.lower() == 'delete':
-                if not path_params or 'id' not in path_params:
+                # Handle DELETE request
+                if not path_params or not param_name or path_params.get(param_name) is None:
                     return {"error": "ID is required for delete"}, 400
-                record_id = path_params['id']
+                record_id = path_params[param_name]
                 if record_id not in store:
                     return {"error": "Record not found"}, 404
                 del store[record_id]
@@ -182,7 +174,6 @@ class DynamicAPIHandler:
             return {"error": f"Internal server error: {str(e)}"}, 500
 
     def get_response_schema(self, path: str, method: str) -> Optional[Dict[str, Any]]:
-        """Get response schema with better error handling."""
         try:
             path_obj = self.spec.get('paths', {}).get(path, {})
             operation = path_obj.get(method.lower(), {})
@@ -196,7 +187,6 @@ class DynamicAPIHandler:
             return None
 
     def get_request_schema(self, path: str, method: str) -> Optional[Dict[str, Any]]:
-        """Get request schema with better error handling."""
         try:
             path_obj = self.spec.get('paths', {}).get(path, {})
             operation = path_obj.get(method.lower(), {})
@@ -213,7 +203,6 @@ class OpenAPIFlask:
         self.register_routes()
 
     def load_spec(self, spec_file: str) -> Dict[str, Any]:
-        """Load and validate OpenAPI specification."""
         if not os.path.exists(spec_file):
             raise FileNotFoundError(f"Specification file {spec_file} not found")
         
@@ -232,7 +221,6 @@ class OpenAPIFlask:
             raise ValueError(f"Error parsing YAML file: {str(e)}")
 
     def register_routes(self):
-        """Register routes with improved error handling."""
         paths = self.spec.get('paths', {})
 
         async def handle_request_wrapper(path: str, method: str, **path_params):
@@ -244,8 +232,12 @@ class OpenAPIFlask:
                 return jsonify({"error": f"Request handling error: {str(e)}"}), 500
 
         for path, methods in paths.items():
-            # Convert OpenAPI path params to Flask format
-            flask_path = re.sub(r'{([^}]+)}', lambda m: f'<regex("[^/]+"):id>', path)
+            param_name = self.handler.get_path_param_name(path)
+            if param_name:
+                # Convert OpenAPI path params to Flask format using the actual parameter name
+                flask_path = path.replace(f'{{{param_name}}}', f'<regex("[^/]+"):{param_name}>')
+            else:
+                flask_path = path
 
             for method in methods.keys():
                 endpoint = f"{method}_{path}"
@@ -257,7 +249,6 @@ class OpenAPIFlask:
                 )
 
 def run_app(spec_file: str, host: str = '0.0.0.0', port: int = 5000, debug: bool = True):
-    """Run the application with configurable parameters."""
     try:
         app = OpenAPIFlask(spec_file)
         app.app.run(host=host, port=port, debug=debug)
