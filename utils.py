@@ -1,115 +1,98 @@
-import json
-import os
-from typing import Any, Dict, List, Optional
 from flask import Flask, request, jsonify
 import yaml
-from jsonschema import validate, ValidationError
+import os
+from typing import Dict, Any
 
-class SchemaValidator:
-    def __init__(self, schema: Dict[str, Any]):
-        self.schema = schema
-        self.definitions = schema.get('components', {}).get('schemas', {})
+app = Flask(__name__)
 
-    def validate_schema(self, data: Dict[str, Any], schema_name: str) -> None:
-        if schema_name not in self.definitions:
-            raise ValueError(f"Schema {schema_name} not found in definitions")
-        schema = self.definitions[schema_name]
-        try:
-            validate(instance=data, schema=schema)
-        except ValidationError as e:
-            raise ValidationError(f"Schema validation failed: {str(e)}")
+# Global storage for different entity types
+storage = {}
+id_counters = {}
 
-class GenericAPIHandler:
-    def __init__(self, schema_validator: SchemaValidator):
-        self.validator = schema_validator
-        self.storage: Dict[str, List[Dict[str, Any]]] = {}
+def get_next_id(entity_type: str) -> int:
+    """Get next ID for an entity type"""
+    if entity_type not in id_counters:
+        id_counters[entity_type] = 1
+    current_id = id_counters[entity_type]
+    id_counters[entity_type] += 1
+    return current_id
 
-    def create_entity(self, entity_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        self.validator.validate_schema(data, entity_type)
-        if entity_type not in self.storage:
-            self.storage[entity_type] = []
-        entity_id = len(self.storage[entity_type]) + 1
-        entity = {**data, 'id': entity_id}
-        self.storage[entity_type].append(entity)
-        return entity
+def initialize_storage(entity_type: str):
+    """Initialize storage for an entity type if it doesn't exist"""
+    if entity_type not in storage:
+        storage[entity_type] = {}
 
-    def get_entities(self, entity_type: str) -> List[Dict[str, Any]]:
-        return self.storage.get(entity_type, [])
+@app.route('/<entity_type>', methods=['POST'])
+def create_entity(entity_type):
+    """Create a new entity"""
+    try:
+        initialize_storage(entity_type)
+        data = request.get_json()
+        entity_id = get_next_id(entity_type)
+        data['id'] = entity_id
+        storage[entity_type][entity_id] = data
+        return jsonify({"data": data}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-    def get_entity(self, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
-        return next((e for e in self.storage.get(entity_type, []) if e['id'] == entity_id), None)
+@app.route('/<entity_type>', methods=['GET'])
+def get_all_entities(entity_type):
+    """Get all entities of a type"""
+    try:
+        initialize_storage(entity_type)
+        entities = list(storage[entity_type].values())
+        return jsonify({"data": entities}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-    def update_entity(self, entity_type: str, entity_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        self.validator.validate_schema(data, entity_type)
-        for i, entity in enumerate(self.storage.get(entity_type, [])):
-            if entity['id'] == entity_id:
-                self.storage[entity_type][i] = {**entity, **data, 'id': entity_id}
-                return self.storage[entity_type][i]
-        return None
+@app.route('/<entity_type>/<int:id>', methods=['GET'])
+def get_entity(entity_type, id):
+    """Get a single entity by ID"""
+    try:
+        initialize_storage(entity_type)
+        if id not in storage[entity_type]:
+            return jsonify({"error": f"{entity_type} not found"}), 404
+        entity = storage[entity_type][id]
+        return jsonify({"data": entity}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-    def delete_entity(self, entity_type: str, entity_id: int) -> bool:
-        for i, entity in enumerate(self.storage.get(entity_type, [])):
-            if entity['id'] == entity_id:
-                del self.storage[entity_type][i]
-                return True
-        return False
+@app.route('/<entity_type>/<int:id>', methods=['PUT'])
+def update_entity(entity_type, id):
+    """Update an entity"""
+    try:
+        initialize_storage(entity_type)
+        if id not in storage[entity_type]:
+            return jsonify({"error": f"{entity_type} not found"}), 404
+        data = request.get_json()
+        data['id'] = id
+        storage[entity_type][id] = data
+        return jsonify({"data": data}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-class OpenAPIFlask:
-    def __init__(self, yaml_file: str):
-        self.app = Flask(__name__)
-        self.spec = self._load_spec(yaml_file)
-        self.validator = SchemaValidator(self.spec)
-        self.handler = GenericAPIHandler(self.validator)
-        self._register_routes()
+@app.route('/<entity_type>/<int:id>', methods=['DELETE'])
+def delete_entity(entity_type, id):
+    """Delete an entity"""
+    try:
+        initialize_storage(entity_type)
+        if id not in storage[entity_type]:
+            return jsonify({"error": f"{entity_type} not found"}), 404
+        deleted_entity = storage[entity_type].pop(id)
+        return jsonify({"data": deleted_entity}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-    def _load_spec(self, yaml_path: str) -> Dict[str, Any]:
-        full_path = os.path.join(os.path.dirname(__file__), yaml_path)
-        with open(full_path, 'r') as f:
-            return yaml.safe_load(f)
+def load_spec(spec_file: str) -> Dict:
+    """Load and parse the OpenAPI specification"""
+    if not os.path.exists(spec_file):
+        raise FileNotFoundError(f"Specification file {spec_file} not found.")
+    with open(spec_file, 'r') as file:
+        return yaml.safe_load(file)
 
-    def _register_routes(self) -> None:
-        for path in self.spec.get('paths', {}):
-            entity_type = path.strip('/').split('/')[-1]
-            self._register_endpoints(entity_type)
-
-    def _register_endpoints(self, entity_type: str) -> None:
-        path = f'/api/{entity_type}'
-        
-        @self.app.route(path, methods=['GET'])
-        def get_all():
-            return jsonify(self.handler.get_entities(entity_type))
-        
-        @self.app.route(path, methods=['POST'])
-        def create():
-            data = request.get_json()
-            try:
-                return jsonify(self.handler.create_entity(entity_type, data)), 201
-            except ValidationError as e:
-                return jsonify({'error': str(e)}), 400
-
-        entity_path = f'{path}/<int:entity_id>'
-        
-        @self.app.route(entity_path, methods=['GET'])
-        def get_one(entity_id):
-            entity = self.handler.get_entity(entity_type, entity_id)
-            return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
-        
-        @self.app.route(entity_path, methods=['PUT'])
-        def update(entity_id):
-            data = request.get_json()
-            try:
-                entity = self.handler.update_entity(entity_type, entity_id, data)
-                return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
-            except ValidationError as e:
-                return jsonify({'error': str(e)}), 400
-        
-        @self.app.route(entity_path, methods=['DELETE'])
-        def delete(entity_id):
-            return ('', 204) if self.handler.delete_entity(entity_type, entity_id) else (jsonify({'error': 'Not found'}), 404)
-
-    def run(self, host='localhost', port=5000):
-        self.app.run(host=host, port=port)
-
-if __name__ == "__main__":
-    api = OpenAPIFlask("openapi.yaml")
-    api.run()
+if __name__ == '__main__':
+    import sys
+    spec_file = sys.argv[1] if len(sys.argv) > 1 else 'openapi.yaml'
+    # Load spec file but use it only for validation if needed
+    spec = load_spec(spec_file)
+    app.run(debug=True, port=5000)
