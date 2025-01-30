@@ -1,18 +1,18 @@
 from flask import Flask, request, jsonify
 import yaml
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 import jsonschema
 from jsonschema import validate, ValidationError
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Global storage for different entity types
+# Global storage and configuration
 storage = {}
 id_counters = {}
-# Store OpenAPI spec globally
 spec = {}
+endpoints = {}
 
 class ValidationException(Exception):
     """Custom exception for schema validation errors"""
@@ -32,7 +32,7 @@ def get_next_id(entity_type: str) -> str:
     """Get next ID for an entity type"""
     if entity_type not in id_counters:
         id_counters[entity_type] = 1
-    current_id = str(id_counters[entity_type])  # Convert to string as per schema
+    current_id = str(id_counters[entity_type])
     id_counters[entity_type] += 1
     return current_id
 
@@ -43,10 +43,7 @@ def initialize_storage(entity_type: str):
 
 def get_request_schema(path: str, method: str) -> Dict:
     """Get request schema from OpenAPI spec"""
-    path_spec = spec.get('paths', {}).get(f'/{path}', {})
-    if '{paymentId}' in path:
-        path_spec = spec.get('paths', {}).get(f'/{path.split("/")[0]}/{{paymentId}}', {})
-    
+    path_spec = spec.get('paths', {}).get(path, {})
     method_spec = path_spec.get(method.lower(), {})
     request_body = method_spec.get('requestBody', {})
     schema = request_body.get('content', {}).get('application/json', {}).get('schema', {})
@@ -54,10 +51,7 @@ def get_request_schema(path: str, method: str) -> Dict:
 
 def get_response_schema(path: str, method: str, status_code: str) -> Dict:
     """Get response schema from OpenAPI spec"""
-    path_spec = spec.get('paths', {}).get(f'/{path}', {})
-    if '{paymentId}' in path:
-        path_spec = spec.get('paths', {}).get(f'/{path.split("/")[0]}/{{paymentId}}', {})
-    
+    path_spec = spec.get('paths', {}).get(path, {})
     method_spec = path_spec.get(method.lower(), {})
     responses = method_spec.get('responses', {})
     response_spec = responses.get(str(status_code), {})
@@ -67,113 +61,136 @@ def get_response_schema(path: str, method: str, status_code: str) -> Dict:
 def validate_schema(data: Dict, schema: Dict, context: str):
     """Validate data against schema"""
     if not schema:
-        return  # Skip validation if no schema defined
-    
+        return
     try:
         validate(instance=data, schema=schema)
     except ValidationError as e:
         raise ValidationException(f"{context} validation failed: {str(e)}")
 
-def validate_request(entity_type: str, method: str, data: Dict = None):
-    """Validate request data against OpenAPI spec"""
-    schema = get_request_schema(entity_type, method)
-    if data and schema:
-        validate_schema(data, schema, "Request")
+def extract_path_param(path: str) -> str:
+    """Extract the path parameter name from a path template"""
+    parts = path.split('{')
+    if len(parts) > 1:
+        return parts[1].split('}')[0]
+    return None
 
-def validate_response(entity_type: str, method: str, status_code: int, data: Dict):
-    """Validate response data against OpenAPI spec"""
-    schema = get_response_schema(entity_type, method, status_code)
-    if schema:
-        validate_schema(data, schema, "Response")
-
-@app.route('/payments', methods=['POST'])
-def create_payment():
-    try:
-        data = request.get_json()
-        validate_request('payments', 'POST', data)
-        
-        initialize_storage('payments')
-        payment_id = get_next_id('payments')
-        
-        # Add required fields
-        data['id'] = payment_id
-        data['created_at'] = datetime.utcnow().isoformat()
-        if 'status' not in data:
-            data['status'] = 'pending'
+def register_endpoints():
+    """Register endpoints dynamically based on OpenAPI spec"""
+    for path, path_spec in spec.get('paths', {}).items():
+        # Extract the base resource type from the path
+        parts = path.strip('/').split('/')
+        if not parts:
+            continue
             
-        storage['payments'][payment_id] = data
-        validate_response('payments', 'POST', 201, data)
-        return jsonify(data), 201
-    
-    except ValidationException as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        resource_type = parts[0]
+        initialize_storage(resource_type)
+        
+        # Register collection endpoints (e.g., /books)
+        if len(parts) == 1:
+            if 'post' in path_spec:
+                register_create_endpoint(resource_type, path)
+            if 'get' in path_spec:
+                register_list_endpoint(resource_type, path)
+                
+        # Register instance endpoints (e.g., /books/{bookId})
+        elif len(parts) == 2 and '{' in parts[1]:
+            id_param = extract_path_param(path)
+            if 'get' in path_spec:
+                register_get_endpoint(resource_type, path, id_param)
+            if 'put' in path_spec:
+                register_update_endpoint(resource_type, path, id_param)
+            if 'delete' in path_spec:
+                register_delete_endpoint(resource_type, path, id_param)
 
-@app.route('/payments', methods=['GET'])
-def get_all_payments():
-    try:
-        initialize_storage('payments')
-        payments = list(storage['payments'].values())
-        validate_response('payments', 'GET', 200, payments)
-        return jsonify(payments), 200
-    
-    except ValidationException as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+def register_create_endpoint(resource_type: str, path: str):
+    """Register POST endpoint for creating resources"""
+    @app.route(path, methods=['POST'])
+    def create():
+        try:
+            data = request.get_json()
+            validate_schema(data, get_request_schema(path, 'post'), "Request")
+            
+            resource_id = get_next_id(resource_type)
+            data['id'] = resource_id
+            data['created_at'] = datetime.utcnow().isoformat()
+            
+            storage[resource_type][resource_id] = data
+            validate_schema(data, get_response_schema(path, 'post', 201), "Response")
+            return jsonify(data), 201
+        
+        except ValidationException as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
 
-@app.route('/payments/<payment_id>', methods=['GET'])
-def get_payment(payment_id):
-    try:
-        initialize_storage('payments')
-        if payment_id not in storage['payments']:
-            return jsonify({"error": "Payment not found"}), 404
+def register_list_endpoint(resource_type: str, path: str):
+    """Register GET endpoint for listing resources"""
+    @app.route(path, methods=['GET'])
+    def list_resources():
+        try:
+            resources = list(storage[resource_type].values())
+            validate_schema(resources, get_response_schema(path, 'get', 200), "Response")
+            return jsonify(resources), 200
         
-        payment = storage['payments'][payment_id]
-        validate_response('payments/{paymentId}', 'GET', 200, payment)
-        return jsonify(payment), 200
-    
-    except ValidationException as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        except ValidationException as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
 
-@app.route('/payments/<payment_id>', methods=['PUT'])
-def update_payment(payment_id):
-    try:
-        data = request.get_json()
-        validate_request('payments/{paymentId}', 'PUT', data)
+def register_get_endpoint(resource_type: str, path: str, id_param: str):
+    """Register GET endpoint for retrieving a single resource"""
+    @app.route(path, methods=['GET'])
+    def get(resource_id):
+        try:
+            if resource_id not in storage[resource_type]:
+                return jsonify({"error": f"{resource_type} not found"}), 404
+            
+            resource = storage[resource_type][resource_id]
+            validate_schema(resource, get_response_schema(path, 'get', 200), "Response")
+            return jsonify(resource), 200
         
-        initialize_storage('payments')
-        if payment_id not in storage['payments']:
-            return jsonify({"error": "Payment not found"}), 404
-        
-        # Preserve id and created_at
-        data['id'] = payment_id
-        data['created_at'] = storage['payments'][payment_id]['created_at']
-        
-        storage['payments'][payment_id] = data
-        validate_response('payments/{paymentId}', 'PUT', 200, data)
-        return jsonify(data), 200
-    
-    except ValidationException as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        except ValidationException as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
 
-@app.route('/payments/<payment_id>', methods=['DELETE'])
-def delete_payment(payment_id):
-    try:
-        initialize_storage('payments')
-        if payment_id not in storage['payments']:
-            return jsonify({"error": "Payment not found"}), 404
+def register_update_endpoint(resource_type: str, path: str, id_param: str):
+    """Register PUT endpoint for updating resources"""
+    @app.route(path, methods=['PUT'])
+    def update(resource_id):
+        try:
+            if resource_id not in storage[resource_type]:
+                return jsonify({"error": f"{resource_type} not found"}), 404
+                
+            data = request.get_json()
+            validate_schema(data, get_request_schema(path, 'put'), "Request")
+            
+            # Preserve id and created_at
+            data['id'] = resource_id
+            data['created_at'] = storage[resource_type][resource_id]['created_at']
+            
+            storage[resource_type][resource_id] = data
+            validate_schema(data, get_response_schema(path, 'put', 200), "Response")
+            return jsonify(data), 200
         
-        storage['payments'].pop(payment_id)
-        return '', 204
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        except ValidationException as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+def register_delete_endpoint(resource_type: str, path: str, id_param: str):
+    """Register DELETE endpoint for removing resources"""
+    @app.route(path, methods=['DELETE'])
+    def delete(resource_id):
+        try:
+            if resource_id not in storage[resource_type]:
+                return jsonify({"error": f"{resource_type} not found"}), 404
+            
+            storage[resource_type].pop(resource_id)
+            return '', 204
+        
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
 
 def load_spec(spec_file: str) -> Dict:
     """Load and parse the OpenAPI specification"""
@@ -186,4 +203,5 @@ if __name__ == '__main__':
     import sys
     spec_file = sys.argv[1] if len(sys.argv) > 1 else 'openapi.yaml'
     spec = load_spec(spec_file)
+    register_endpoints()
     app.run(debug=True, port=5000)
