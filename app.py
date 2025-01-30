@@ -33,14 +33,16 @@ class GenericAPIHandler:
     def get_all(self, entity_type: str) -> tuple:
         """Get all entities."""
         store = self.get_or_create_store(entity_type)
-        return list(store.values()), 200
+        entities = list(store.values())
+        return {"data": entities}, 200
 
     def get_one(self, entity_type: str, entity_id: int) -> tuple:
         """Get a single entity."""
         store = self.get_or_create_store(entity_type)
         if entity_id not in store:
             return {"error": f"{entity_type} not found"}, 404
-        return store[entity_id], 200
+        entity = store[entity_id]
+        return {"data": entity}, 200
 
     def update(self, entity_type: str, entity_id: int, data: Dict) -> tuple:
         """Update an existing entity."""
@@ -98,21 +100,25 @@ class OpenAPIFlask:
                     response, status_code = self.handler.get_one(entity_type, int(kwargs['id']))
                     return jsonify(response), status_code
                 elif method == 'get':  # Get all entities
-                    return jsonify(self.handler.get_all(entity_type)[0]), 200
+                    response, status_code = self.handler.get_all(entity_type)
+                    return jsonify(response), status_code
                 elif method == 'post':  # Create an entity
                     data = request.get_json()
                     schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    return jsonify(self.handler.create(entity_type, data)[0]), 201
+                    created_data, status_code = self.handler.create(entity_type, data)
+                    return jsonify({"data": created_data}), status_code
                 elif method == 'put':  # Update an entity
                     data = request.get_json()
                     entity_id = int(kwargs['id'])
                     schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    return jsonify(self.handler.update(entity_type, entity_id, data)[0]), 200
+                    updated_data, status_code = self.handler.update(entity_type, entity_id, data)
+                    return jsonify({"data": updated_data}), status_code
                 elif method == 'delete':  # Delete an entity
                     entity_id = int(kwargs['id'])
-                    return jsonify(self.handler.delete(entity_type, entity_id)[0]), 200
+                    deleted_data, status_code = self.handler.delete(entity_type, entity_id)
+                    return jsonify({"data": deleted_data}), status_code
                 else:
                     return jsonify({"error": "Method not supported"}), 405
             except Exception as e:
