@@ -95,7 +95,8 @@ class OpenAPIFlask:
             entity_type = path.split('/')[1]
             try:
                 if method == 'get' and 'id' in kwargs:  # Get a single entity
-                    return jsonify(self.handler.get_one(entity_type, int(kwargs['id']))[0]), 200
+                    response, status_code = self.handler.get_one(entity_type, int(kwargs['id']))
+                    return jsonify(response), status_code
                 elif method == 'get':  # Get all entities
                     return jsonify(self.handler.get_all(entity_type)[0]), 200
                 elif method == 'post':  # Create an entity
