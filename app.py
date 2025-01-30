@@ -28,7 +28,7 @@ class GenericAPIHandler:
         data['id'] = entity_id
         store[entity_id] = data
         self.id_counters[entity_type] += 1
-        return data, 201
+        return {"data": data}, 201
 
     def get_all(self, entity_type: str) -> tuple:
         """Get all entities."""
@@ -39,9 +39,9 @@ class GenericAPIHandler:
     def get_one(self, entity_type: str, entity_id: int) -> tuple:
         """Get a single entity."""
         store = self.get_or_create_store(entity_type)
-        if entity_id not in store:
+        entity = store.get(entity_id)
+        if entity is None:
             return {"error": f"{entity_type} not found"}, 404
-        entity = store[entity_id]
         return {"data": entity}, 200
 
     def update(self, entity_type: str, entity_id: int, data: Dict) -> tuple:
@@ -51,14 +51,15 @@ class GenericAPIHandler:
             return {"error": f"{entity_type} not found"}, 404
         data['id'] = entity_id
         store[entity_id] = data
-        return data, 200
+        return {"data": data}, 200
 
     def delete(self, entity_type: str, entity_id: int) -> tuple:
         """Delete an entity."""
         store = self.get_or_create_store(entity_type)
         if entity_id not in store:
             return {"error": f"{entity_type} not found"}, 404
-        return store.pop(entity_id), 200
+        deleted_entity = store.pop(entity_id)
+        return {"data": deleted_entity}, 200
 
 
 class OpenAPIFlask:
@@ -87,7 +88,7 @@ class OpenAPIFlask:
         """Register routes dynamically based on OpenAPI spec."""
         paths = self.spec.get('paths', {})
         for path, methods in paths.items():
-            flask_path = path.replace('{', '<').replace('}', '>')  # Convert OpenAPI path to Flask format
+            flask_path = path.replace('{', '<int:id>').replace('}', '')  # Convert OpenAPI path to Flask format with type
             for method, operation in methods.items():
                 self.register_route(flask_path, method, operation)
 
@@ -96,29 +97,34 @@ class OpenAPIFlask:
         def route_handler(**kwargs):
             entity_type = path.split('/')[1]
             try:
-                if method == 'get' and 'id' in kwargs:  # Get a single entity
-                    response, status_code = self.handler.get_one(entity_type, int(kwargs['id']))
+                if method == 'get' and 'id' in kwargs:
+                    # Get a single entity by ID
+                    entity_id = kwargs['id']
+                    response, status_code = self.handler.get_one(entity_type, entity_id)
                     return jsonify(response), status_code
-                elif method == 'get':  # Get all entities
+                elif method == 'get':
+                    # Get all entities
                     response, status_code = self.handler.get_all(entity_type)
                     return jsonify(response), status_code
-                elif method == 'post':  # Create an entity
+                elif method == 'post':
+                    # Create an entity
                     data = request.get_json()
                     schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    created_data, status_code = self.handler.create(entity_type, data)
-                    return jsonify({"data": created_data}), status_code
-                elif method == 'put':  # Update an entity
+                    return jsonify(self.handler.create(entity_type, data)[0]), 201
+                elif method == 'put':
+                    # Update an entity
                     data = request.get_json()
-                    entity_id = int(kwargs['id'])
+                    entity_id = kwargs['id']
                     schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
                     self.validate_request_body(data, schema)
-                    updated_data, status_code = self.handler.update(entity_type, entity_id, data)
-                    return jsonify({"data": updated_data}), status_code
-                elif method == 'delete':  # Delete an entity
-                    entity_id = int(kwargs['id'])
-                    deleted_data, status_code = self.handler.delete(entity_type, entity_id)
-                    return jsonify({"data": deleted_data}), status_code
+                    response, status_code = self.handler.update(entity_type, entity_id, data)
+                    return jsonify(response), status_code
+                elif method == 'delete':
+                    # Delete an entity
+                    entity_id = kwargs['id']
+                    response, status_code = self.handler.delete(entity_type, entity_id)
+                    return jsonify(response), status_code
                 else:
                     return jsonify({"error": "Method not supported"}), 405
             except Exception as e:
