@@ -1,133 +1,115 @@
+import json
+import os
+from typing import Any, Dict, List, Optional
 from flask import Flask, request, jsonify
 import yaml
-import os
-from typing import Dict, Any
+from jsonschema import validate, ValidationError
 
+class SchemaValidator:
+    def __init__(self, schema: Dict[str, Any]):
+        self.schema = schema
+        self.definitions = schema.get('components', {}).get('schemas', {})
+
+    def validate_schema(self, data: Dict[str, Any], schema_name: str) -> None:
+        if schema_name not in self.definitions:
+            raise ValueError(f"Schema {schema_name} not found in definitions")
+        schema = self.definitions[schema_name]
+        try:
+            validate(instance=data, schema=schema)
+        except ValidationError as e:
+            raise ValidationError(f"Schema validation failed: {str(e)}")
 
 class GenericAPIHandler:
-    """Handles CRUD operations for any entity dynamically."""
-    def __init__(self):
-        self.store: Dict[str, Dict[str, Any]] = {}
-        self.id_counters: Dict[str, int] = {}
+    def __init__(self, schema_validator: SchemaValidator):
+        self.validator = schema_validator
+        self.storage: Dict[str, List[Dict[str, Any]]] = {}
 
-    def get_entity_type(self, path: str) -> str:
-        """Extract entity type from the path."""
-        return path.split('/')[1] if len(path.split('/')) > 1 else 'default'
+    def create_entity(self, entity_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.validator.validate_schema(data, entity_type)
+        if entity_type not in self.storage:
+            self.storage[entity_type] = []
+        entity_id = len(self.storage[entity_type]) + 1
+        entity = {**data, 'id': entity_id}
+        self.storage[entity_type].append(entity)
+        return entity
 
-    def get_or_create_store(self, entity_type: str) -> Dict[str, Any]:
-        """Get or create a store for the entity type."""
-        if entity_type not in self.store:
-            self.store[entity_type] = {}
-            self.id_counters[entity_type] = 1
-        return self.store[entity_type]
+    def get_entities(self, entity_type: str) -> List[Dict[str, Any]]:
+        return self.storage.get(entity_type, [])
 
-    def create(self, entity_type: str, data: Dict) -> tuple:
-        """Create a new entity."""
-        store = self.get_or_create_store(entity_type)
-        entity_id = str(self.id_counters[entity_type])
-        data['id'] = entity_id
-        store[entity_id] = data
-        self.id_counters[entity_type] += 1
-        return data, 201
+    def get_entity(self, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+        return next((e for e in self.storage.get(entity_type, []) if e['id'] == entity_id), None)
 
-    def get_all(self, entity_type: str) -> tuple:
-        """Get all entities."""
-        store = self.get_or_create_store(entity_type)
-        return list(store.values()), 200
+    def update_entity(self, entity_type: str, entity_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        self.validator.validate_schema(data, entity_type)
+        for i, entity in enumerate(self.storage.get(entity_type, [])):
+            if entity['id'] == entity_id:
+                self.storage[entity_type][i] = {**entity, **data, 'id': entity_id}
+                return self.storage[entity_type][i]
+        return None
 
-    def get_one(self, entity_type: str, entity_id: str) -> tuple:
-        """Get a single entity."""
-        store = self.get_or_create_store(entity_type)
-        if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
-        return store[entity_id], 200
-
-    def update(self, entity_type: str, entity_id: str, data: Dict) -> tuple:
-        """Update an existing entity."""
-        store = self.get_or_create_store(entity_type)
-        if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
-        data['id'] = entity_id
-        store[entity_id] = data
-        return data, 200
-
-    def delete(self, entity_type: str, entity_id: str) -> tuple:
-        """Delete an entity."""
-        store = self.get_or_create_store(entity_type)
-        if entity_id not in store:
-            return {"error": f"{entity_type} not found"}, 404
-        deleted_entity = store.pop(entity_id)
-        return deleted_entity, 200
-
+    def delete_entity(self, entity_type: str, entity_id: int) -> bool:
+        for i, entity in enumerate(self.storage.get(entity_type, [])):
+            if entity['id'] == entity_id:
+                del self.storage[entity_type][i]
+                return True
+        return False
 
 class OpenAPIFlask:
-    """Dynamic Flask application based on OpenAPI specifications."""
-    def __init__(self, spec_file: str):
+    def __init__(self, yaml_file: str):
         self.app = Flask(__name__)
-        self.handler = GenericAPIHandler()
-        self.spec = self.load_spec(spec_file)
-        self.register_routes()
+        self.spec = self._load_spec(yaml_file)
+        self.validator = SchemaValidator(self.spec)
+        self.handler = GenericAPIHandler(self.validator)
+        self._register_routes()
 
-    def load_spec(self, spec_file: str) -> Dict:
-        """Load and parse the OpenAPI specification."""
-        if not os.path.exists(spec_file):
-            raise FileNotFoundError(f"Specification file {spec_file} not found.")
-        with open(spec_file, 'r') as file:
-            return yaml.safe_load(file)
+    def _load_spec(self, yaml_path: str) -> Dict[str, Any]:
+        full_path = os.path.join(os.path.dirname(__file__), yaml_path)
+        with open(full_path, 'r') as f:
+            return yaml.safe_load(f)
 
-    def validate_request_body(self, data: Dict, schema: Dict) -> None:
-        """Validate request body against OpenAPI schema."""
-        required_fields = schema.get('required', [])
-        for field in required_fields:
-            if field not in data:
-                raise ValueError(f"Missing required field: {field}")
+    def _register_routes(self) -> None:
+        for path in self.spec.get('paths', {}):
+            entity_type = path.strip('/').split('/')[-1]
+            self._register_endpoints(entity_type)
 
-    def register_routes(self) -> None:
-        """Register routes dynamically based on OpenAPI spec."""
-        paths = self.spec.get('paths', {})
-        for path, methods in paths.items():
-            flask_path = path.replace('{', '<').replace('}', '>')  # Convert OpenAPI path to Flask format
-            for method, operation in methods.items():
-                self.register_route(flask_path, method, operation)
-
-    def register_route(self, path: str, method: str, operation: Dict) -> None:
-        """Register a single route."""
-        def route_handler(**kwargs):
-            entity_type = path.split('/')[1]
+    def _register_endpoints(self, entity_type: str) -> None:
+        path = f'/api/{entity_type}'
+        
+        @self.app.route(path, methods=['GET'])
+        def get_all():
+            return jsonify(self.handler.get_entities(entity_type))
+        
+        @self.app.route(path, methods=['POST'])
+        def create():
+            data = request.get_json()
             try:
-                if method == 'get' and 'paymentId' in kwargs:  # Get a single entity
-                    return jsonify(self.handler.get_one(entity_type, kwargs['paymentId'])[0]), 200
-                elif method == 'get':  # Get all entities
-                    return jsonify(self.handler.get_all(entity_type)[0]), 200
-                elif method == 'post':  # Create an entity
-                    data = request.get_json()
-                    schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
-                    self.validate_request_body(data, schema)
-                    return jsonify(self.handler.create(entity_type, data)[0]), 201
-                elif method == 'put':  # Update an entity
-                    data = request.get_json()
-                    entity_id = kwargs['paymentId']
-                    schema = operation.get('requestBody', {}).get('content', {}).get('application/json', {}).get('schema', {})
-                    self.validate_request_body(data, schema)
-                    return jsonify(self.handler.update(entity_type, entity_id, data)[0]), 200
-                elif method == 'delete':  # Delete an entity
-                    entity_id = kwargs['paymentId']
-                    return jsonify(self.handler.delete(entity_type, entity_id)[0]), 200
-                else:
-                    return jsonify({"error": "Method not supported"}), 405
-            except Exception as e:
-                return jsonify({"error": str(e)}), 400
+                return jsonify(self.handler.create_entity(entity_type, data)), 201
+            except ValidationError as e:
+                return jsonify({'error': str(e)}), 400
 
-        endpoint = f"{method}_{path}"
-        self.app.add_url_rule(path, endpoint, route_handler, methods=[method.upper()])
+        entity_path = f'{path}/<int:entity_id>'
+        
+        @self.app.route(entity_path, methods=['GET'])
+        def get_one(entity_id):
+            entity = self.handler.get_entity(entity_type, entity_id)
+            return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
+        
+        @self.app.route(entity_path, methods=['PUT'])
+        def update(entity_id):
+            data = request.get_json()
+            try:
+                entity = self.handler.update_entity(entity_type, entity_id, data)
+                return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
+            except ValidationError as e:
+                return jsonify({'error': str(e)}), 400
+        
+        @self.app.route(entity_path, methods=['DELETE'])
+        def delete(entity_id):
+            return ('', 204) if self.handler.delete_entity(entity_type, entity_id) else (jsonify({'error': 'Not found'}), 404)
 
-    def run(self, *args, **kwargs):
-        """Run the Flask application."""
-        self.app.run(*args, **kwargs)
+    def run(self, host='localhost', port=5000):
+        self.app.run(host=host, port=port)
 
-
-if __name__ == '__main__':
-    import sys
-    spec_file = sys.argv[1] if len(sys.argv) > 1 else 'openapi.yaml'
-    app = OpenAPIFlask(spec_file)
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    api = OpenAPIFlask("openapi.yaml")
+    api.run()
