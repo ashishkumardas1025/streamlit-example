@@ -72,40 +72,77 @@ class OpenAPIFlask:
             entity_type = path.strip('/').split('/')[-1]
             self._register_endpoints(entity_type)
 
-    def _register_endpoints(self, entity_type: str) -> None:
-        path = f'/api/{entity_type}'
-        
-        @self.app.route(path, methods=['GET'])
-        def get_all():
-            return jsonify(self.handler.get_entities(entity_type))
-        
-        @self.app.route(path, methods=['POST'])
-        def create():
-            data = request.get_json()
-            try:
-                return jsonify(self.handler.create_entity(entity_type, data)), 201
-            except ValidationError as e:
-                return jsonify({'error': str(e)}), 400
-
-        entity_path = f'{path}/<int:entity_id>'
-        
-        @self.app.route(entity_path, methods=['GET'])
-        def get_one(entity_id):
-            entity = self.handler.get_entity(entity_type, entity_id)
-            return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
-        
-        @self.app.route(entity_path, methods=['PUT'])
-        def update(entity_id):
-            data = request.get_json()
-            try:
-                entity = self.handler.update_entity(entity_type, entity_id, data)
+    def _create_endpoint_handler(self, entity_type: str, operation: str):
+        """Create a closure for handling endpoint operations."""
+        if operation == 'get_all':
+            def handler():
+                return jsonify(self.handler.get_entities(entity_type))
+        elif operation == 'create':
+            def handler():
+                data = request.get_json()
+                try:
+                    return jsonify(self.handler.create_entity(entity_type, data)), 201
+                except ValidationError as e:
+                    return jsonify({'error': str(e)}), 400
+        elif operation == 'get_one':
+            def handler(entity_id):
+                entity = self.handler.get_entity(entity_type, entity_id)
                 return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
-            except ValidationError as e:
-                return jsonify({'error': str(e)}), 400
+        elif operation == 'update':
+            def handler(entity_id):
+                data = request.get_json()
+                try:
+                    entity = self.handler.update_entity(entity_type, entity_id, data)
+                    return jsonify(entity) if entity else (jsonify({'error': 'Not found'}), 404)
+                except ValidationError as e:
+                    return jsonify({'error': str(e)}), 400
+        elif operation == 'delete':
+            def handler(entity_id):
+                return ('', 204) if self.handler.delete_entity(entity_type, entity_id) else (jsonify({'error': 'Not found'}), 404)
+        return handler
+
+    def _register_endpoints(self, entity_type: str) -> None:
+        """Register endpoints with unique function names for each route."""
+        base_path = f'/api/{entity_type}'
         
-        @self.app.route(entity_path, methods=['DELETE'])
-        def delete(entity_id):
-            return ('', 204) if self.handler.delete_entity(entity_type, entity_id) else (jsonify({'error': 'Not found'}), 404)
+        # Collection endpoints
+        self.app.add_url_rule(
+            base_path,
+            f'get_all_{entity_type}',
+            self._create_endpoint_handler(entity_type, 'get_all'),
+            methods=['GET']
+        )
+        
+        self.app.add_url_rule(
+            base_path,
+            f'create_{entity_type}',
+            self._create_endpoint_handler(entity_type, 'create'),
+            methods=['POST']
+        )
+        
+        # Individual entity endpoints
+        entity_path = f'{base_path}/<int:entity_id>'
+        
+        self.app.add_url_rule(
+            entity_path,
+            f'get_one_{entity_type}',
+            self._create_endpoint_handler(entity_type, 'get_one'),
+            methods=['GET']
+        )
+        
+        self.app.add_url_rule(
+            entity_path,
+            f'update_{entity_type}',
+            self._create_endpoint_handler(entity_type, 'update'),
+            methods=['PUT']
+        )
+        
+        self.app.add_url_rule(
+            entity_path,
+            f'delete_{entity_type}',
+            self._create_endpoint_handler(entity_type, 'delete'),
+            methods=['DELETE']
+        )
 
     def run(self, host='localhost', port=5000):
         self.app.run(host=host, port=port)
