@@ -1,72 +1,69 @@
 from flask import Flask, request, jsonify
+import uuid
 import yaml
 import os
+import requests
+from datetime import datetime
 
 app = Flask(__name__)
+CONFIG_FILE = "config.yaml"
 
-# In-memory storage for dynamic endpoints and data
-storage = {}
-dynamic_endpoints = {}
-
-def get_or_create_storage(path):
-    """Ensure storage exists for a specific endpoint path."""
-    if path not in storage:
-        storage[path] = []
-    return storage[path]
-
-@app.before_request
-def handle_dynamic_routes():
-    """Intercept requests and dynamically register endpoints if not found."""
-    path = request.path
-    method = request.method
-
-    # If endpoint already registered, let Flask handle it
-    if path in dynamic_endpoints and method in dynamic_endpoints[path]:
-        return None  
-
-    # Extract response schema dynamically from request data
-    if method in ["POST", "PUT"]:
-        data = request.get_json()
-        if not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON payload"}), 400
-        response_schema = {key: type(value).__name__ for key, value in data.items()}
+def create_empty_yaml():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w") as f:
+            yaml.dump({}, f)
+        print("Config.yaml created successfully")
     else:
-        response_schema = {}
+        print("Config.yaml already exists")
 
-    # Register the endpoint dynamically
-    register_dynamic_endpoint(path, method, response_schema)
+def read_config():
+    with open(CONFIG_FILE, "r") as f:
+        return yaml.safe_load(f) or {}
 
-def register_dynamic_endpoint(path, method, response_schema):
-    """Register a new endpoint dynamically."""
-    if path not in dynamic_endpoints:
-        dynamic_endpoints[path] = {}
+def write_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
 
-    def dynamic_handler(petID=None):
-        """Generic handler for dynamic endpoints."""
-        if method == "GET":
-            return jsonify(storage.get(path, [])), 200
-        elif method == "POST":
-            data = request.get_json()
-            get_or_create_storage(path).append(data)
-            return jsonify(data), 201
-        elif method == "PUT":
-            data = request.get_json()
-            storage[path] = data
-            return jsonify(data), 200
-        elif method == "DELETE":
-            storage.pop(path, None)
-            return "", 204
+@app.route('/addendpoint', methods=['POST'])
+def add_endpoint():
+    data = request.get_json()
+    path = data.get("path")
+    method = data.get("method").upper()
+    request_data = data.get("request", {})
+    response_data = data.get("response", {})
+    
+    if not path or not method:
+        return jsonify({"status": "error", "message": "Path and method are required"}), 400
+    
+    config = read_config()
+    endpoint_id = str(uuid.uuid4())
+    config[endpoint_id] = {
+        "path": path,
+        "method": method,
+        "request": request_data,
+        "response": response_data,
+        "created_at": str(datetime.now())
+    }
+    write_config(config)
+    
+    return jsonify({"status": "success", "message": "Endpoint added successfully", "id": endpoint_id}), 201
 
-    # Store endpoint details
-    dynamic_endpoints[path][method] = response_schema
+@app.route('/<path:endpoint_path>', methods=['POST', 'GET', 'PUT', 'DELETE'])
+def dynamic_endpoint(endpoint_path):
+    config = read_config()
+    matching_endpoint = next((v for k, v in config.items() if v["path"] == f"/{endpoint_path}"), None)
+    
+    if not matching_endpoint:
+        return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+    
+    if request.method != matching_endpoint["method"]:
+        return jsonify({"status": "error", "message": "Method not allowed for this endpoint"}), 405
+    
+    return jsonify({
+        "status": "success",
+        "message": "Endpoint consumed successfully",
+        "response": matching_endpoint["response"]
+    }), 200
 
-    # Dynamically add the route
-    app.add_url_rule(path, path.replace("/", "_") + "_" + method, dynamic_handler, methods=[method])
-
-@app.route("/list-endpoints", methods=["GET"])
-def list_endpoints():
-    """List dynamically registered endpoints."""
-    return jsonify(dynamic_endpoints), 200
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+if __name__ == '__main__':
+    app.run(debug=True)
