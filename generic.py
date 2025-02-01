@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import uuid
 import yaml
 import os
-import requests
 from datetime import datetime
 
 app = Flask(__name__)
@@ -52,14 +51,46 @@ def add_endpoint():
     
     return jsonify({"status": "success", "message": "Endpoint added successfully", "id": endpoint_id}), 201
 
+@app.route('/endpoints', methods=['GET'])
+def get_all_endpoints():
+    config = read_config()
+    return jsonify({"status": "success", "endpoints": config}), 200
+
+@app.route('/endpoints/<endpoint_id>', methods=['GET'])
+def get_endpoint(endpoint_id):
+    config = read_config()
+    if endpoint_id in config:
+        return jsonify({"status": "success", "endpoint": config[endpoint_id]}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/endpoints/<endpoint_id>', methods=['PUT'])
+def update_endpoint(endpoint_id):
+    data = request.get_json()
+    config = read_config()
+    if endpoint_id in config:
+        config[endpoint_id].update(data)
+        write_config(config)
+        return jsonify({"status": "success", "message": "Endpoint updated successfully", "updated_endpoint": config[endpoint_id]}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/endpoints/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(endpoint_id):
+    config = read_config()
+    if endpoint_id in config:
+        del config[endpoint_id]
+        write_config(config)
+        return jsonify({"status": "success", "message": "Endpoint deleted successfully"}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
 @app.route('/<path:endpoint_path>', methods=['POST', 'GET', 'PUT', 'DELETE'])
 def dynamic_endpoint(endpoint_path):
     config = read_config()
-    matching_endpoint = next((v for k, v in config.items() if v["path"] == f"/{endpoint_path}"), None)
+    matching_endpoints = [v for v in config.values() if v["path"] == f"/{endpoint_path}"]
     
-    if not matching_endpoint:
+    if not matching_endpoints:
         return jsonify({"status": "error", "message": "Endpoint not found"}), 404
     
+    matching_endpoint = matching_endpoints[0]
     if request.method not in matching_endpoint["methods"]:
         return jsonify({"status": "error", "message": "Method not allowed for this endpoint"}), 405
     
