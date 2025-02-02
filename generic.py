@@ -10,65 +10,62 @@ CONFIG_FILE = "config.yaml"
 def create_empty_yaml():
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w") as f:
-            initial_data = {
-                "paths": {},        # Store path configurations
-                "responses": {}     # Store response history
-            }
-            yaml.dump(initial_data, f)
+            yaml.dump({"endpoints": {}}, f)
         print("Config.yaml created successfully")
 
 def read_config():
     create_empty_yaml()
     with open(CONFIG_FILE, "r") as f:
-        return yaml.safe_load(f) or {"paths": {}, "responses": {}}
+        return yaml.safe_load(f) or {"endpoints": {}}
 
 def write_config(config):
     with open(CONFIG_FILE, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
 
 def normalize_path(path):
-    # Ensure path starts with / and remove trailing /
     return '/' + path.strip('/')
 
-@app.route('/register_path', methods=['POST'])
-def register_path():
+@app.route('/register', methods=['POST'])
+def register_endpoint():
     try:
         data = request.get_json()
         
-        if not data.get("path"):
+        # Validate required fields
+        required_fields = ["path", "method", "request", "response"]
+        if not all(field in data for field in required_fields):
             return jsonify({
-                "status": "error", 
-                "message": "Path is required"
+                "status": "error",
+                "message": f"Missing required fields. Required: {required_fields}"
             }), 400
 
-        # Normalize the path
+        # Normalize path and method
         path = normalize_path(data["path"])
-        
-        # Get or default the methods
-        methods = data.get("methods", ["GET"])
-        if isinstance(methods, str):
-            methods = [methods.upper()]
-        else:
-            methods = [m.upper() for m in methods]
+        method = data["method"].upper()
 
+        # Generate UUID for the endpoint
+        endpoint_id = str(uuid.uuid4())
+        
         config = read_config()
         
-        # Create path entry
-        path_config = {
-            "methods": methods,
-            "request_template": data.get("request", {}),
-            "response": data.get("response", {}),
+        # Create endpoint configuration
+        endpoint_config = {
+            "id": endpoint_id,
+            "path": path,
+            "method": method,
+            "request": data["request"],
+            "response": data["response"],
             "created_at": str(datetime.now())
         }
         
-        # Store by path instead of UUID
-        config["paths"][path] = path_config
+        # Store endpoint by UUID
+        config["endpoints"][endpoint_id] = endpoint_config
         write_config(config)
         
         return jsonify({
             "status": "success",
-            "message": "Path registered successfully",
-            "path": path
+            "message": "Endpoint registered successfully",
+            "endpoint_id": endpoint_id,
+            "endpoint": endpoint_config
         }), 201
         
     except Exception as e:
@@ -77,65 +74,58 @@ def register_path():
             "message": str(e)
         }), 500
 
-@app.route('/paths', methods=['GET'])
-def list_paths():
+@app.route('/endpoints', methods=['GET'])
+def list_endpoints():
     config = read_config()
     return jsonify({
         "status": "success",
-        "paths": config["paths"]
+        "endpoints": config["endpoints"]
     }), 200
 
-@app.route('/paths/<path:path>', methods=['GET'])
-def get_path_config(path):
+@app.route('/endpoints/<endpoint_id>', methods=['GET'])
+def get_endpoint(endpoint_id):
     config = read_config()
-    normalized_path = normalize_path(path)
     
-    if normalized_path in config["paths"]:
+    if endpoint_id in config["endpoints"]:
         return jsonify({
             "status": "success",
-            "path_config": config["paths"][normalized_path]
+            "endpoint": config["endpoints"][endpoint_id]
         }), 200
     
     return jsonify({
         "status": "error",
-        "message": "Path not found"
+        "message": "Endpoint not found"
     }), 404
 
-@app.route('/paths/<path:path>', methods=['PUT'])
-def update_path(path):
+@app.route('/endpoints/<endpoint_id>', methods=['PUT'])
+def update_endpoint(endpoint_id):
     try:
         data = request.get_json()
         config = read_config()
-        normalized_path = normalize_path(path)
         
-        if normalized_path not in config["paths"]:
+        if endpoint_id not in config["endpoints"]:
             return jsonify({
                 "status": "error",
-                "message": "Path not found"
+                "message": "Endpoint not found"
             }), 404
-            
-        # Update existing path configuration
-        path_config = config["paths"][normalized_path]
-        if "methods" in data:
-            methods = data["methods"]
-            if isinstance(methods, str):
-                methods = [methods.upper()]
-            else:
-                methods = [m.upper() for m in methods]
-            path_config["methods"] = methods
-            
-        if "request" in data:
-            path_config["request_template"] = data["request"]
-        if "response" in data:
-            path_config["response"] = data["response"]
         
-        path_config["updated_at"] = str(datetime.now())
+        endpoint = config["endpoints"][endpoint_id]
+        
+        # Update allowed fields
+        if "request" in data:
+            endpoint["request"] = data["request"]
+        if "response" in data:
+            endpoint["response"] = data["response"]
+        if "method" in data:
+            endpoint["method"] = data["method"].upper()
+            
+        endpoint["updated_at"] = str(datetime.now())
         write_config(config)
         
         return jsonify({
             "status": "success",
-            "message": "Path updated successfully",
-            "path_config": path_config
+            "message": "Endpoint updated successfully",
+            "endpoint": endpoint
         }), 200
         
     except Exception as e:
@@ -144,22 +134,22 @@ def update_path(path):
             "message": str(e)
         }), 500
 
-@app.route('/paths/<path:path>', methods=['DELETE'])
-def delete_path(path):
+@app.route('/endpoints/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(endpoint_id):
     config = read_config()
-    normalized_path = normalize_path(path)
     
-    if normalized_path in config["paths"]:
-        del config["paths"][normalized_path]
+    if endpoint_id in config["endpoints"]:
+        deleted_endpoint = config["endpoints"].pop(endpoint_id)
         write_config(config)
         return jsonify({
             "status": "success",
-            "message": "Path deleted successfully"
+            "message": "Endpoint deleted successfully",
+            "deleted_endpoint": deleted_endpoint
         }), 200
     
     return jsonify({
         "status": "error",
-        "message": "Path not found"
+        "message": "Endpoint not found"
     }), 404
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
@@ -168,63 +158,27 @@ def handle_request(path):
         config = read_config()
         normalized_path = normalize_path(path)
         
-        # Find matching path
-        path_config = config["paths"].get(normalized_path)
-        if not path_config:
+        # Find matching endpoint by path and method
+        matching_endpoint = None
+        for endpoint in config["endpoints"].values():
+            if endpoint["path"] == normalized_path and endpoint["method"] == request.method:
+                matching_endpoint = endpoint
+                break
+                
+        if not matching_endpoint:
             return jsonify({
                 "status": "error",
-                "message": "Path not found"
+                "message": f"No endpoint found for {request.method} {normalized_path}"
             }), 404
             
-        # Check if method is allowed
-        if request.method not in path_config["methods"]:
-            return jsonify({
-                "status": "error",
-                "message": f"Method {request.method} not allowed for this path"
-            }), 405
-            
-        # Store the request/response history
-        response_id = str(uuid.uuid4())
-        response_record = {
-            "path": normalized_path,
-            "method": request.method,
-            "request_data": request.get_json() if request.is_json else {},
-            "response_data": path_config["response"],
-            "timestamp": str(datetime.now())
-        }
-        
-        config["responses"][response_id] = response_record
-        write_config(config)
-        
         # Return the configured response
-        return jsonify(path_config["response"]), 200
+        return jsonify(matching_endpoint["response"]), 200
         
     except Exception as e:
         return jsonify({
             "status": "error",
             "message": str(e)
         }), 500
-
-@app.route('/responses', methods=['GET'])
-def get_responses():
-    config = read_config()
-    path_filter = request.args.get('path')
-    
-    if path_filter:
-        normalized_path = normalize_path(path_filter)
-        filtered_responses = {
-            k: v for k, v in config["responses"].items() 
-            if v["path"] == normalized_path
-        }
-        return jsonify({
-            "status": "success",
-            "responses": filtered_responses
-        }), 200
-        
-    return jsonify({
-        "status": "success",
-        "responses": config["responses"]
-    }), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
