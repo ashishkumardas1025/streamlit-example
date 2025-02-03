@@ -1,113 +1,146 @@
+import random
+import string
+import uuid
+from datetime import datetime
+from faker import Faker
 from flask import Flask, request, jsonify
 import yaml
 import os
-import logging
-from http import HTTPStatus
-import re
-import sys
 
-class GenericAPIHandler:
-    """Handles CRUD operations for any entity dynamically."""
-    def __init__(self, logger):
-        self.store = {}
-        self.logger = logger
+app = Flask(__name__)
+CONFIG_FILE = "config.yaml"
+fake = Faker()
 
-    def get_or_create_store(self, entity_type):
-        if entity_type not in self.store:
-            self.store[entity_type] = {}
-        return self.store[entity_type]
+# Ensure config file exists
+def create_empty_yaml():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w") as f:
+            yaml.dump({"endpoints": {}}, f)
 
-    def get_all(self, entity_type):
-        return jsonify(list(self.get_or_create_store(entity_type).values())), HTTPStatus.OK
+def read_config():
+    create_empty_yaml()
+    with open(CONFIG_FILE, "r") as f:
+        return yaml.safe_load(f) or {"endpoints": {}}
 
-    def get_one(self, entity_type, entity_id):
-        entity = self.get_or_create_store(entity_type).get(entity_id)
-        if entity:
-            return jsonify(entity), HTTPStatus.OK
-        return jsonify({"error": "Not Found"}), HTTPStatus.NOT_FOUND
+def write_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
 
-    def create(self, entity_type, data):
-        store = self.get_or_create_store(entity_type)
-        entity_id = len(store) + 1
-        data["id"] = entity_id
-        store[entity_id] = data
-        return jsonify(data), HTTPStatus.CREATED
+def normalize_path(path):
+    return '/' + path.strip('/')
 
-    def update(self, entity_type, entity_id, data):
-        store = self.get_or_create_store(entity_type)
-        if entity_id not in store:
-            return jsonify({"error": "Not Found"}), HTTPStatus.NOT_FOUND
-        store[entity_id].update(data)
-        return jsonify(store[entity_id]), HTTPStatus.OK
+def generate_dynamic_value(value):
+    """Detect and generate dynamic values for the stored response."""
+    if isinstance(value, int):
+        return random.randint(1000, 99999)
+    elif isinstance(value, float):
+        return round(random.uniform(10.5, 99999.99), 2)
+    elif isinstance(value, bool):
+        return random.choice([True, False])
+    elif isinstance(value, list):
+        return [generate_dynamic_value(value[0]) for _ in range(random.randint(2, 5))] if value else []
+    elif isinstance(value, dict):
+        return {key: generate_dynamic_value(val) for key, val in value.items()}
+    elif isinstance(value, str):
+        if value.lower() == "{uuid}":
+            return str(uuid.uuid4())
+        elif value.lower() == "{string}":
+            return fake.name()
+        elif value.lower() == "{email}":
+            return fake.email()
+        elif value.lower() == "{phone}":
+            return fake.phone_number()
+        elif value.lower() == "{company}":
+            return fake.company()
+        elif value.lower() == "{address}":
+            return fake.address()
+        elif value.lower() == "{timestamp}":
+            return str(datetime.now())
+        else:
+            return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    return value
 
-    def delete(self, entity_type, entity_id):
-        store = self.get_or_create_store(entity_type)
-        if entity_id in store:
-            del store[entity_id]
-            return '', HTTPStatus.NO_CONTENT
-        return jsonify({"error": "Not Found"}), HTTPStatus.NOT_FOUND
+@app.route('/endpoint/<path:path>', methods=['POST'])
+def register_endpoint(path):
+    """Registers a new endpoint with random values each time."""
+    try:
+        data = request.get_json()
+        required_fields = ["method", "request", "response"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
 
-class OpenAPIFlask:
-    """Dynamic Flask application based on OpenAPI specifications."""
-    def __init__(self, spec_file):
-        self.setup_logging()
-        self.app = Flask(__name__)
-        self.handler = GenericAPIHandler(self.logger)
-        self.load_spec(spec_file)
-        self.register_routes()
+        path = normalize_path(path)
+        config = read_config()
+        method = data["method"].upper()
+        endpoint_id = str(uuid.uuid4())
 
-    def setup_logging(self):
-        self.logger = logging.getLogger(__name__)
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
-        self.logger.setLevel(logging.INFO)
+        # Generate dynamic response values
+        random_response = {key: generate_dynamic_value(value) for key, value in data["response"].items()}
 
-    def load_spec(self, spec_file):
-        with open(spec_file, 'r') as file:
-            self.spec = yaml.safe_load(file)
+        if path not in config["endpoints"]:
+            config["endpoints"][path] = {}
 
-    def register_routes(self):
-        for path, methods in self.spec.get('paths', {}).items():
-            flask_path = path.replace('{', '<').replace('}', '>')
-            for method, operation in methods.items():
-                self.register_route(flask_path, method, operation)
+        config["endpoints"][path][endpoint_id] = {
+            "id": endpoint_id,
+            "method": method,
+            "request": data["request"],
+            "response": random_response,
+            "created_at": str(datetime.now())
+        }
+        write_config(config)
 
-    def register_route(self, path, method, operation):
-        def route_handler(**kwargs):
-            entity_type = path.split('/')[1]
-            entity_id_key = next((key for key in kwargs if key.endswith('id')), None)
-            entity_id = kwargs.get(entity_id_key, None)
-            if entity_id:
-                try:
-                    entity_id = int(entity_id)
-                except ValueError:
-                    return jsonify({"error": "Invalid ID format"}), HTTPStatus.BAD_REQUEST
-            
-            if method == 'get' and entity_id:
-                return self.handler.get_one(entity_type, entity_id)
-            elif method == 'get':
-                return self.handler.get_all(entity_type)
-            elif method == 'post':
-                return self.handler.create(entity_type, request.get_json())
-            elif method == 'put':
-                return self.handler.update(entity_type, entity_id, request.get_json())
-            elif method == 'delete':
-                return self.handler.delete(entity_type, entity_id)
-            return jsonify({"error": "Method Not Allowed"}), HTTPStatus.METHOD_NOT_ALLOWED
+        return jsonify({"status": "success", "message": "New endpoint registered successfully", "endpoint_id": endpoint_id}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-        endpoint = f"{method}_{path}"
-        self.app.add_url_rule(path, endpoint, route_handler, methods=[method.upper()])
+@app.route('/endpoint/<path:path>', methods=['GET'])
+def get_all_endpoints(path):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"]:
+        return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]}), 200
+    return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
 
-    def run(self):
-        self.app.run(debug=True, port=5000)
+@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['GET'])
+def get_endpoint(path, endpoint_id):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
+        return jsonify({"status": "success", "endpoint": config["endpoints"][normalized_path][endpoint_id]}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['PUT'])
+def update_endpoint(path, endpoint_id):
+    try:
+        data = request.get_json()
+        config = read_config()
+        normalized_path = normalize_path(path)
+        
+        if normalized_path not in config["endpoints"] or endpoint_id not in config["endpoints"][normalized_path]:
+            return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+        
+        endpoint = config["endpoints"][normalized_path][endpoint_id]
+        for key, value in data.items():
+            endpoint[key] = value
+        endpoint["updated_at"] = str(datetime.now())
+        write_config(config)
+
+        return jsonify({"status": "success", "message": "Endpoint updated successfully", "endpoint": endpoint}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(path, endpoint_id):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    
+    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
+        deleted_endpoint = config["endpoints"][normalized_path].pop(endpoint_id)
+        if not config["endpoints"][normalized_path]:
+            del config["endpoints"][normalized_path]
+        write_config(config)
+        return jsonify({"status": "success", "message": "Endpoint deleted successfully", "deleted_endpoint": deleted_endpoint}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("Usage: python script.py <openapi_spec.yaml>")
-        sys.exit(1)
-    
-    spec_file = sys.argv[1]
-    app = OpenAPIFlask(spec_file)
-    app.run()
+    app.run(debug=True)
