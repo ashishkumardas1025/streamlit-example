@@ -1,149 +1,130 @@
 from flask import Flask, request, jsonify
+import uuid
 import yaml
 import os
-from typing import Dict, Any
+from datetime import datetime
 
 app = Flask(__name__)
+CONFIG_FILE = "config.yaml"
 
-# Global storage for different entity types
-storage = {}
-id_counters = {}
-OPENAPI_FILE = "openapi.yaml"
+def create_empty_yaml():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w") as f:
+            yaml.dump({"endpoints": {}}, f)
 
-def get_next_id(entity_type: str) -> int:
-    """Get next ID for an entity type"""
-    if entity_type not in id_counters:
-        id_counters[entity_type] = 1
-    current_id = id_counters[entity_type]
-    id_counters[entity_type] += 1
-    return current_id
+def read_config():
+    create_empty_yaml()
+    with open(CONFIG_FILE, "r") as f:
+        return yaml.safe_load(f) or {"endpoints": {}}
 
-def initialize_storage(entity_type: str):
-    """Initialize storage for an entity type if it doesn't exist"""
-    if entity_type not in storage:
-        storage[entity_type] = {}
+def write_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
 
-def load_openapi_spec() -> Dict:
-    """Load the OpenAPI YAML file"""
-    if os.path.exists(OPENAPI_FILE):
-        with open(OPENAPI_FILE, "r") as file:
-            try:
-                return yaml.safe_load(file) or {}
-            except yaml.YAMLError:
-                return {}
-    return {}
+def normalize_path(path):
+    return '/' + path.strip('/')
 
-def save_openapi_spec(spec: Dict):
-    """Save the updated OpenAPI YAML file"""
-    with open(OPENAPI_FILE, "w") as file:
-        yaml.dump(spec, file, default_flow_style=False)
-
-def update_response_schema(entity_type: str, response_data: Dict):
-    """Update the OpenAPI spec with the latest response schema"""
-    spec = load_openapi_spec()
-
-    # Ensure the OpenAPI structure exists
-    if "components" not in spec:
-        spec["components"] = {}
-    if "schemas" not in spec["components"]:
-        spec["components"]["schemas"] = {}
-
-    # Update the schema for the entity type
-    spec["components"]["schemas"][entity_type] = response_data
-
-    # Save the updated spec back to the file
-    save_openapi_spec(spec)
-
-@app.route('/<entity_type>', methods=['POST'])
-def create_entity(entity_type):
-    """Create a new entity"""
+@app.route('/endpoint/<path:path>', methods=['POST'])
+def register_endpoint(path):
     try:
-        initialize_storage(entity_type)
         data = request.get_json()
-        entity_id = get_next_id(entity_type)
-        data['id'] = entity_id
-        storage[entity_type][entity_id] = data
+        required_fields = ["method", "request", "response"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
 
-        # Store response schema inside openapi.yaml
-        update_response_schema(entity_type, data)
+        path = normalize_path(path)
+        method = data["method"].upper()
+        endpoint_id = str(uuid.uuid4())
+        config = read_config()
+        
+        if path not in config["endpoints"]:
+            config["endpoints"][path] = {}
 
-        return jsonify({"data": data}), 201
+        endpoint_config = {"id": endpoint_id, "method": method, "request": data["request"], "response": data["response"], **{k: v for k, v in data.items() if k not in required_fields}, "created_at": str(datetime.now())}
+        config["endpoints"][path][endpoint_id] = endpoint_config
+        write_config(config)
+
+        return jsonify({"status": "success", "message": "New endpoint registered successfully", "endpoint_id": endpoint_id}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/<entity_type>', methods=['GET'])
-def get_all_entities(entity_type):
-    """Get all entities of a type"""
+@app.route('/endpoints', methods=['GET'])
+def get_all_post_endpoints():
+    config = read_config()
+    post_endpoints = {}
+    
+    for path, endpoints in config["endpoints"].items():
+        for endpoint_id, endpoint in endpoints.items():
+            if endpoint["method"] == "POST":
+                if path not in post_endpoints:
+                    post_endpoints[path] = {}
+                post_endpoints[path][endpoint_id] = endpoint
+    
+    return jsonify({"status": "success", "post_endpoints": post_endpoints}), 200
+
+@app.route('/endpoints/<path:path>', methods=['GET'])
+def list_endpoints_by_path(path):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"]:
+        return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]}), 200
+    return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
+
+@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['GET'])
+def get_endpoint(path, endpoint_id):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
+        return jsonify({"status": "success", "endpoint": config["endpoints"][normalized_path][endpoint_id]}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['PUT'])
+def update_endpoint(path, endpoint_id):
     try:
-        initialize_storage(entity_type)
-        entities = list(storage[entity_type].values())
-
-        # Store response schema inside openapi.yaml
-        update_response_schema(entity_type, entities)
-
-        return jsonify({"data": entities}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-@app.route('/<entity_type>/<int:id>', methods=['GET'])
-def get_entity(entity_type, id):
-    """Get a single entity by ID"""
-    try:
-        initialize_storage(entity_type)
-        if id not in storage[entity_type]:
-            return jsonify({"error": f"{entity_type} not found"}), 404
-        entity = storage[entity_type][id]
-
-        # Store response schema inside openapi.yaml
-        update_response_schema(entity_type, entity)
-
-        return jsonify({"data": entity}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-@app.route('/<entity_type>/<int:id>', methods=['PUT'])
-def update_entity(entity_type, id):
-    """Update an entity"""
-    try:
-        initialize_storage(entity_type)
-        if id not in storage[entity_type]:
-            return jsonify({"error": f"{entity_type} not found"}), 404
         data = request.get_json()
-        data['id'] = id
-        storage[entity_type][id] = data
+        config = read_config()
+        normalized_path = normalize_path(path)
+        
+        if normalized_path not in config["endpoints"] or endpoint_id not in config["endpoints"][normalized_path]:
+            return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+        
+        endpoint = config["endpoints"][normalized_path][endpoint_id]
+        for key, value in data.items():
+            endpoint[key] = value
+        endpoint["updated_at"] = str(datetime.now())
+        write_config(config)
 
-        # Store response schema inside openapi.yaml
-        update_response_schema(entity_type, data)
-
-        return jsonify({"data": data}), 200
+        return jsonify({"status": "success", "message": "Endpoint updated successfully", "endpoint": endpoint}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/<entity_type>/<int:id>', methods=['DELETE'])
-def delete_entity(entity_type, id):
-    """Delete an entity"""
+@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(path, endpoint_id):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    
+    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
+        deleted_endpoint = config["endpoints"][normalized_path].pop(endpoint_id)
+        if not config["endpoints"][normalized_path]:
+            del config["endpoints"][normalized_path]
+        write_config(config)
+        return jsonify({"status": "success", "message": "Endpoint deleted successfully", "deleted_endpoint": deleted_endpoint}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def handle_request(path):
     try:
-        initialize_storage(entity_type)
-        if id not in storage[entity_type]:
-            return jsonify({"error": f"{entity_type} not found"}), 404
-        deleted_entity = storage[entity_type].pop(id)
-
-        # Store deleted entity schema inside openapi.yaml
-        update_response_schema(entity_type, deleted_entity)
-
-        return jsonify({"data": deleted_entity}), 200
+        config = read_config()
+        normalized_path = normalize_path(path)
+        
+        if normalized_path in config["endpoints"]:
+            for endpoint in config["endpoints"][normalized_path].values():
+                if endpoint["method"] == request.method:
+                    return jsonify(endpoint["response"]), 200
+        
+        return jsonify({"status": "error", "message": f"No endpoint found for {request.method} {normalized_path}"}), 404
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-def load_spec(spec_file: str) -> Dict:
-    """Load and parse the OpenAPI specification"""
-    if not os.path.exists(spec_file):
-        raise FileNotFoundError(f"Specification file {spec_file} not found.")
-    with open(spec_file, 'r') as file:
-        return yaml.safe_load(file)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    import sys
-    spec_file = sys.argv[1] if len(sys.argv) > 1 else 'openapi.yaml'
-    spec = load_spec(spec_file)
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
