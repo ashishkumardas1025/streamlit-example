@@ -125,12 +125,58 @@ if __name__ == '__main__':
 
 
 
-endpoint_data = config["endpoints"][normalized_path][endpoint_id]
-        
-        # Check if the user only wants the response schema
-        if request.args.get('schema') == 'true':
-            return jsonify({"status": "success", "response_schema": endpoint_data["response"]}), 200
-        
-        return jsonify({"status": "success", "endpoint": endpoint_data}), 200
-    
+@app.route('/register', methods=['POST'])
+def register_endpoint():
+    try:
+        data = request.get_json()
+        required_fields = ["path", "method", "response"]
+        if not all(field in data for field in required_fields):
+            return jsonify({
+                "status": "error",
+                "message": f"Missing required fields. Required: {required_fields}"
+            }), 400
+
+        path = normalize_path(data["path"])
+        method = data["method"].upper()
+        config = read_config()
+
+        # Check if the path already exists in config.yaml
+        if path in config["endpoints"]:
+            # Check if an endpoint with the same method already exists
+            for endpoint_id, endpoint in config["endpoints"][path].items():
+                if endpoint["method"] == method:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Endpoint already exists",
+                        "endpoint_id": endpoint_id
+                    }), 409  # HTTP 409 Conflict
+
+        # Generate a new UUID since the endpoint is not already registered
+        endpoint_id = str(uuid.uuid4())
+
+        # If the path does not exist, create it
+        if path not in config["endpoints"]:
+            config["endpoints"][path] = {}
+
+        # Register the new endpoint
+        endpoint_config = {
+            "id": endpoint_id,
+            "method": method,
+            "response": data["response"],
+            "created_at": str(datetime.now())
+        }
+        config["endpoints"][path][endpoint_id] = endpoint_config
+        write_config(config)
+
+        return jsonify({
+            "status": "success",
+            "message": "New endpoint registered successfully",
+            "endpoint_id": endpoint_id
+        }), 201  # HTTP 201 Created
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
