@@ -78,9 +78,17 @@ def handle_dynamic_request(path):
         normalized_path = normalize_path(path)
 
         if normalized_path in config["endpoints"]:
+            endpoint_id = str(uuid.uuid4())
             for endpoint in config["endpoints"][normalized_path].values():
                 response_schema = endpoint.get("response_schema", {})
                 dynamic_response = generate_dynamic_value(response_schema)
+                config["endpoints"][normalized_path][endpoint_id] = {
+                    "id": endpoint_id,
+                    "method": "POST",
+                    "response": dynamic_response,
+                    "created_at": str(datetime.now())
+                }
+                write_config(config)
                 return jsonify(dynamic_response), 200
 
         return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
@@ -133,6 +141,12 @@ def delete_endpoint(path, endpoint_id):
         if not config["endpoints"][normalized_path]:
             del config["endpoints"][normalized_path]
         write_config(config)
+        return jsonify({"status": "success", "message": "Endpoint deleted successfully", "deleted_endpoint": deleted_endpoint}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
         return jsonify({"status": "success", "message": "Endpoint deleted successfully", "deleted_endpoint": deleted_endpoint}), 200
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
