@@ -121,3 +121,16 @@ def handle_request(path):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+
+
+endpoint_data = config["endpoints"][normalized_path][endpoint_id]
+        
+        # Check if the user only wants the response schema
+        if request.args.get('schema') == 'true':
+            return jsonify({"status": "success", "response_schema": endpoint_data["response"]}), 200
+        
+        return jsonify({"status": "success", "endpoint": endpoint_data}), 200
+    
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
