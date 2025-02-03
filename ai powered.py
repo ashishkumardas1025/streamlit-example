@@ -30,32 +30,29 @@ def write_config(config):
 def normalize_path(path):
     return '/' + path.strip('/')
 
-def generate_dynamic_value(schema):
-    """Use OpenAI to generate structured random responses based on the schema."""
-    prompt = f"Generate a JSON response matching this schema: {schema}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "system", "content": "You are a helpful AI that generates structured JSON responses."},
-                  {"role": "user", "content": prompt}]
-    )
-    return response["choices"][0]["message"]["content"]
+# def generate_dynamic_value(schema):
+#     """Use OpenAI to generate structured random responses based on the schema."""
+#     prompt = f"Generate a JSON response matching this schema: {schema}"
+#     response = openai.ChatCompletion.create(
+#         model="gpt-3.5-turbo",
+#         messages=[{"role": "system", "content": "You are a helpful AI that generates structured JSON responses."},
+#                   {"role": "user", "content": prompt}]
+#     )
+#     return response["choices"][0]["message"]["content"]
 
-@app.route('/endpoint/<path:path>', methods=['POST'])
-def register_endpoint(path):
-    """Registers a new endpoint with AI-generated dynamic values."""
+@app.route('/olbb-simulator/register', methods=['POST'])
+def register_endpoint():
+    """Registers a new endpoint with the actual response schema."""
     try:
         data = request.get_json()
         required_fields = ["method", "request", "response"]
         if not all(field in data for field in required_fields):
             return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
 
-        path = normalize_path(path)
+        path = normalize_path(data.get("path", ""))
         config = read_config()
         method = data["method"].upper()
         endpoint_id = str(uuid.uuid4())
-
-        # Generate AI-powered response
-        ai_generated_response = generate_dynamic_value(data["response"])
 
         if path not in config["endpoints"]:
             config["endpoints"][path] = {}
@@ -64,7 +61,7 @@ def register_endpoint(path):
             "id": endpoint_id,
             "method": method,
             "request": data["request"],
-            "response": ai_generated_response,
+            "response_schema": data["response"],  # Store response schema
             "created_at": str(datetime.now())
         }
         write_config(config)
@@ -73,7 +70,24 @@ def register_endpoint(path):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/endpoint/<path:path>', methods=['GET'])
+@app.route('/olbb-simulator/<path:path>', methods=['POST'])
+def handle_dynamic_request(path):
+    """Handles requests and generates dynamic responses based on stored schema."""
+    try:
+        config = read_config()
+        normalized_path = normalize_path(path)
+
+        if normalized_path in config["endpoints"]:
+            for endpoint in config["endpoints"][normalized_path].values():
+                response_schema = endpoint.get("response_schema", {})
+                dynamic_response = generate_dynamic_value(response_schema)
+                return jsonify(dynamic_response), 200
+
+        return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/olbb-simulator/<path:path>', methods=['GET'])
 def get_all_endpoints(path):
     config = read_config()
     normalized_path = normalize_path(path)
@@ -81,7 +95,7 @@ def get_all_endpoints(path):
         return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]}), 200
     return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
 
-@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['GET'])
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['GET'])
 def get_endpoint(path, endpoint_id):
     config = read_config()
     normalized_path = normalize_path(path)
@@ -89,7 +103,7 @@ def get_endpoint(path, endpoint_id):
         return jsonify({"status": "success", "endpoint": config["endpoints"][normalized_path][endpoint_id]}), 200
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
-@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['PUT'])
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['PUT'])
 def update_endpoint(path, endpoint_id):
     try:
         data = request.get_json()
@@ -109,7 +123,7 @@ def update_endpoint(path, endpoint_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/endpoint/<path:path>/<endpoint_id>', methods=['DELETE'])
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['DELETE'])
 def delete_endpoint(path, endpoint_id):
     config = read_config()
     normalized_path = normalize_path(path)
@@ -124,82 +138,3 @@ def delete_endpoint(path, endpoint_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-#bedrock improvements
-
-import random
-import uuid
-from datetime import datetime
-from flask import Flask, request, jsonify
-import yaml
-import os
-import boto3
-import json
-
-app = Flask(__name__)
-CONFIG_FILE = "config.yaml"
-
-# Initialize Bedrock client
-bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')  # Adjust region as needed
-
-def generate_dynamic_value(schema):
-    """
-    Use AWS Bedrock Claude to generate structured random responses based on the schema.
-    
-    Args:
-        schema (dict/str): The response schema to use for generation
-    
-    Returns:
-        str: AI-generated response matching the schema
-    """
-    # Prepare the prompt for Claude
-    prompt = f"""You are an AI assistant generating a JSON response that strictly matches the following schema structure:
-{json.dumps(schema, indent=2)}
-
-Please generate a realistic, varied response that follows the exact structure of the given schema. 
-Important rules:
-- Maintain the exact same keys as in the original schema
-- Generate plausible, random values for each key
-- Preserve the data types of the original schema
-- Do not include any explanatory text, only return the pure JSON
-
-Generate the response now:"""
-
-    # Prepare the request body for Bedrock Claude
-    body = json.dumps({
-        "prompt": prompt,
-        "max_tokens": 1000,
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "top_k": 250
-    })
-
-    # Invoke the model
-    try:
-        response = bedrock_runtime.invoke_model(
-            modelId="anthropic.claude-v2",  # Use the appropriate Claude model ID
-            body=body
-        )
-        
-        # Extract and parse the response
-        response_body = json.loads(response["body"].read())
-        
-        # Try to parse the response text as JSON
-        try:
-            # Extract the text and attempt to parse it
-            generated_response = json.loads(response_body['completion'].strip())
-            return generated_response
-        except (json.JSONDecodeError, KeyError):
-            # Fallback: use the raw text if JSON parsing fails
-            return response_body['completion'].strip()
-
-    except Exception as e:
-        # Handle any errors in generation
-        print(f"Error generating dynamic value: {e}")
-        return {"error": "Could not generate dynamic response"}
-
-# The rest of the code remains the same as in the original file
-# Only the generate_dynamic_value() function has been replaced
-
-# Existing routes and methods remain unchanged
