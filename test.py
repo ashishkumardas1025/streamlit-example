@@ -119,3 +119,46 @@ def handle_request(path):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+
+
+#dynamic code
+import random
+import string
+from datetime import datetime, timedelta
+
+def generate_random_value(value_type):
+    if value_type == "string":
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    elif value_type == "number":
+        return random.randint(1000, 9999)
+    elif value_type == "float":
+        return round(random.uniform(1000, 9999), 2)
+    elif value_type == "date":
+        return (datetime.now() + timedelta(days=random.randint(-30, 30))).strftime("%Y-%m-%d")
+    elif value_type == "uuid":
+        return str(uuid.uuid4())
+    else:
+        return value_type  # Default to returning the same value
+
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def handle_request(path):
+    try:
+        config = read_config()
+        normalized_path = normalize_path(path)
+
+        if normalized_path in config["endpoints"]:
+            for endpoint in config["endpoints"][normalized_path].values():
+                if endpoint["method"] == request.method:
+                    response = endpoint["response"]
+
+                    # Inject random values if placeholders exist
+                    if isinstance(response, dict):
+                        response = {key: generate_random_value(value) if isinstance(value, str) and value.startswith("{random_") else value for key, value in response.items()}
+
+                    return jsonify(response), 200
+
+        return jsonify({"status": "error", "message": f"No endpoint found for {request.method} {normalized_path}"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
