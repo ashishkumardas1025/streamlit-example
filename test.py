@@ -126,24 +126,47 @@ if __name__ == '__main__':
 #dynamic code
 import random
 import string
+import uuid
 from datetime import datetime, timedelta
+from faker import Faker
 
-def generate_random_value(value_type):
-    if value_type == "string":
-        return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    elif value_type == "number":
-        return random.randint(1000, 9999)
-    elif value_type == "float":
-        return round(random.uniform(1000, 9999), 2)
-    elif value_type == "date":
-        return (datetime.now() + timedelta(days=random.randint(-30, 30))).strftime("%Y-%m-%d")
-    elif value_type == "uuid":
-        return str(uuid.uuid4())
-    else:
-        return value_type  # Default to returning the same value
+fake = Faker()
+
+def generate_dynamic_value(value):
+    """Detects the type of an existing value and generates a similar random value"""
+    
+    if isinstance(value, int):
+        return random.randint(1000, 99999)
+    elif isinstance(value, float):
+        return round(random.uniform(10.5, 99999.99), 2)
+    elif isinstance(value, bool):
+        return random.choice([True, False])
+    elif isinstance(value, list):
+        return [generate_dynamic_value(value[0]) for _ in range(random.randint(2, 5))] if value else []
+    elif isinstance(value, dict):
+        return {key: generate_dynamic_value(val) for key, val in value.items()}
+    elif isinstance(value, str):
+        # Check for known string patterns and replace accordingly
+        if "@" in value and "." in value:
+            return fake.email()
+        elif any(char.isdigit() for char in value) and len(value) in [10, 13, 14]:
+            return fake.phone_number()
+        elif value.lower() in ["true", "false"]:
+            return random.choice(["true", "false"])
+        elif " " in value and len(value) > 5:
+            return fake.sentence()
+        elif value.replace("-", "").isdigit():
+            return str(uuid.uuid4())
+        elif len(value) >= 5:
+            return fake.name()
+        else:
+            return ''.join(random.choices(string.ascii_letters + string.digits, k=len(value)))
+    
+    return value  # Default: return as is
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
 def handle_request(path):
+    """Handles API requests and dynamically generates random values"""
     try:
         config = read_config()
         normalized_path = normalize_path(path)
@@ -153,9 +176,8 @@ def handle_request(path):
                 if endpoint["method"] == request.method:
                     response = endpoint["response"]
 
-                    # Inject random values if placeholders exist
                     if isinstance(response, dict):
-                        response = {key: generate_random_value(value) if isinstance(value, str) and value.startswith("{random_") else value for key, value in response.items()}
+                        response = {key: generate_dynamic_value(value) for key, value in response.items()}
 
                     return jsonify(response), 200
 
