@@ -33,13 +33,18 @@ def register_endpoint(path):
             return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
 
         path = normalize_path(path)
+        config = read_config()
+        
+        if path in config["endpoints"]:
+            existing_id = list(config["endpoints"][path].keys())[0]
+            return jsonify({"status": "error", "message": "Path already exists", "endpoint_id": existing_id}), 409
+        
         method = data["method"].upper()
         endpoint_id = str(uuid.uuid4())
-        config = read_config()
         
         if path not in config["endpoints"]:
             config["endpoints"][path] = {}
-
+        
         endpoint_config = {"id": endpoint_id, "method": method, "request": data["request"], "response": data["response"], **{k: v for k, v in data.items() if k not in required_fields}, "created_at": str(datetime.now())}
         config["endpoints"][path][endpoint_id] = endpoint_config
         write_config(config)
@@ -47,20 +52,6 @@ def register_endpoint(path):
         return jsonify({"status": "success", "message": "New endpoint registered successfully", "endpoint_id": endpoint_id}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/endpoints', methods=['GET'])
-def get_all_post_endpoints():
-    config = read_config()
-    post_endpoints = {}
-    
-    for path, endpoints in config["endpoints"].items():
-        for endpoint_id, endpoint in endpoints.items():
-            if endpoint["method"] == "POST":
-                if path not in post_endpoints:
-                    post_endpoints[path] = {}
-                post_endpoints[path][endpoint_id] = endpoint
-    
-    return jsonify({"status": "success", "post_endpoints": post_endpoints}), 200
 
 @app.route('/endpoints/<path:path>', methods=['GET'])
 def list_endpoints_by_path(path):
