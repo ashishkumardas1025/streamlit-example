@@ -136,3 +136,47 @@ def delete_endpoint(path):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+
+#register
+
+def register_or_handle_request(path):
+    """Handles both endpoint registration and request processing dynamically."""
+    try:
+        data = request.get_json()
+        config = read_config()
+        normalized_path = normalize_path(path)
+        method = request.method.upper()
+
+        if "method" in data and "request" in data and "response" in data:
+            # Register new endpoint
+            if normalized_path not in config["endpoints"]:
+                config["endpoints"][normalized_path] = {}
+            
+            config["endpoints"][normalized_path][method] = {
+                "method": method,
+                "request_schema": data["request"],
+                "response_schema": data["response"],
+                "created_at": str(datetime.now())
+            }
+            write_config(config)
+            return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
+        
+        # Validate request schema before handling response
+        if normalized_path in config["endpoints"] and method in config["endpoints"][normalized_path]:
+            stored_data = config["endpoints"][normalized_path][method]
+            request_schema = stored_data.get("request_schema", {})
+            response_schema = stored_data.get("response_schema", {})
+            
+            # Validate request
+            request_data = request.get_json()
+            if not all(key in request_data for key in request_schema.keys()):
+                return jsonify({"status": "error", "message": "Invalid request parameters"}), 400
+            
+            dynamic_response = generate_dynamic_value(response_schema)
+            return jsonify(dynamic_response), 200
+
+        return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
