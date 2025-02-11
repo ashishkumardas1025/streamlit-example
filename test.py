@@ -2,14 +2,15 @@ import random
 import uuid
 from datetime import datetime
 from flask import Flask, request, jsonify
+from jinja2 import escape
 import yaml
 import os
-import openai
+# import openai
 
 app = Flask(__name__)
 CONFIG_FILE = "config.yaml"
 
-openai.api_key = "your-openai-api-key"  # Replace with your actual OpenAI API key
+# openai.api_key = "your-openai-api-key"  # Replace with your actual OpenAI API key
 
 # Ensure config file exists
 def create_empty_yaml():
@@ -29,68 +30,78 @@ def write_config(config):
 def normalize_path(path):
     return '/' + path.strip('/')
 
-def generate_dynamic_value(schema):
-    """Use OpenAI to generate structured random responses based on the schema."""
-    prompt = f"Generate a JSON object matching this schema: {schema}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "system", "content": "You are a helpful AI that generates structured JSON objects."},
-                  {"role": "user", "content": prompt}]
-    )
-    return response["choices"][0]["message"]["content"]
+# def generate_dynamic_value(schema):
+#     """Use OpenAI to generate structured random responses based on the schema."""
+#     prompt = f"Generate a JSON response matching this schema: {schema}"
+#     response = openai.ChatCompletion.create(
+#         model="gpt-3.5-turbo",
+#         messages=[{"role": "system", "content": "You are a helpful AI that generates structured JSON responses."},
+#                   {"role": "user", "content": prompt}]
+#     )
+#     return response["choices"][0]["message"]["content"]
 
-@app.route('/olbb-simulator/register', methods=['POST'])
-def register_endpoint():
-    """Registers a new endpoint with the actual request and response schema."""
+@app.route('/olbb-simulator/<path:path>', methods=['POST'])
+def register_endpoint(path):
+    """Registers a new endpoint with request and response schemas."""
     try:
         data = request.get_json()
-        required_fields = ["method", "request", "response"]
-        if not all(field in data for field in required_fields):
-            return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
-
-        path = normalize_path(data.get("path", ""))
         config = read_config()
-        method = data["method"].upper()
-        
-        if path not in config["endpoints"]:
-            config["endpoints"][path] = {}
-        
-        config["endpoints"][path][method] = {
+        normalized_path = normalize_path(path)
+        method = data.get("method", "POST").upper()
+
+        if "request" not in data or "response" not in data:
+            return jsonify({"status": "error", "message": "Missing request or response schema"}), 400
+
+        if normalized_path not in config["endpoints"]:
+            config["endpoints"][normalized_path] = {}
+
+        config["endpoints"][normalized_path][method] = {
             "method": method,
             "request_schema": data["request"],
             "response_schema": data["response"],
             "created_at": str(datetime.now())
         }
         write_config(config)
-
         return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/olbb-simulator/<path:path>', methods=['POST'])
-def handle_dynamic_request(path):
-    """Handles requests and validates them against stored schema before generating responses."""
-    try:
-        config = read_config()
-        normalized_path = normalize_path(path)
-        method = "POST"
+# @app.route('/olbb-simulator/ai/<path:path>', methods=['POST'])
+# def handle_dynamic_request(path):
+#     """Handles dynamic API requests, generating responses based on stored schemas."""
+#     try:
+#         config = read_config()
+#         normalized_path = normalize_path(path)
+#         request_data = request.get_json()
 
-        if normalized_path in config["endpoints"] and method in config["endpoints"][normalized_path]:
-            stored_data = config["endpoints"][normalized_path][method]
-            request_schema = stored_data.get("request_schema", {})
-            response_schema = stored_data.get("response_schema", {})
-            
-            # Validate request
-            request_data = request.get_json()
-            if not all(key in request_data for key in request_schema.keys()):
-                return jsonify({"status": "error", "message": "Invalid request parameters"}), 400
-            
-            dynamic_response = generate_dynamic_value(response_schema)
-            return jsonify(dynamic_response), 200
+#         if normalized_path in config["endpoints"]:
+#             endpoint_data = config["endpoints"][normalized_path]
+#             response_schema = endpoint_data.get("response_schema", {})
+#             dynamic_response = generate_dynamic_value(response_schema)
 
-        return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+#             if "instances" not in endpoint_data:
+#                 endpoint_data["instances"] = []
+
+#             if len(endpoint_data["instances"]) == 0:
+#                 instance_id = None  # No UUID for first request
+#             else:
+#                 instance_id = str(uuid.uuid4())
+
+#             new_entry = {
+#                 "id": instance_id,
+#                 "method": "POST",
+#                 "request": request_data,
+#                 "response": dynamic_response,
+#                 "created_at": str(datetime.now())
+#             }
+#             endpoint_data["instances"].append(new_entry)
+#             write_config(config)
+
+#             return jsonify(dynamic_response), 200
+
+#         return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
+#     except Exception as e:
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/olbb-simulator/<path:path>', methods=['GET'])
 def get_all_endpoints(path):
@@ -100,83 +111,47 @@ def get_all_endpoints(path):
         return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]}), 200
     return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
 
-@app.route('/olbb-simulator/<path:path>', methods=['PUT'])
-def update_endpoint(path):
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['GET'])
+def get_endpoint(path, endpoint_id):
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"]:
+        for instance in config["endpoints"][normalized_path].get("instances", []):
+            if instance["id"] == endpoint_id:
+                return jsonify({"status": "success", "endpoint": instance}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['PUT'])
+def update_endpoint(path, endpoint_id):
     try:
         data = request.get_json()
         config = read_config()
         normalized_path = normalize_path(path)
-        method = "PUT"
         
-        if normalized_path not in config["endpoints"]:
-            return jsonify({"status": "error", "message": "Endpoint not found"}), 404
-        
-        config["endpoints"][normalized_path][method] = {
-            "method": method,
-            "request_schema": data.get("request", {}),
-            "response_schema": data.get("response", {}),
-            "updated_at": str(datetime.now())
-        }
-        write_config(config)
-
-        return jsonify({"status": "success", "message": "Endpoint updated successfully"}), 200
+        if normalized_path in config["endpoints"]:
+            for instance in config["endpoints"][normalized_path].get("instances", []):
+                if instance["id"] == endpoint_id:
+                    instance.update(data)
+                    instance["updated_at"] = str(datetime.now())
+                    write_config(config)
+                    return jsonify({"status": "success", "message": "Endpoint updated successfully", "endpoint": instance}), 200
+        return jsonify({"status": "error", "message": "Endpoint not found"}), 404
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/olbb-simulator/<path:path>', methods=['DELETE'])
-def delete_endpoint(path):
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(path, endpoint_id):
     config = read_config()
     normalized_path = normalize_path(path)
     
     if normalized_path in config["endpoints"]:
-        del config["endpoints"][normalized_path]
-        write_config(config)
-        return jsonify({"status": "success", "message": "Endpoint deleted successfully"}), 200
+        instances = config["endpoints"][normalized_path].get("instances", [])
+        for i, instance in enumerate(instances):
+            if instance["id"] == endpoint_id:
+                del instances[i]
+                write_config(config)
+                return jsonify({"status": "success", "message": "Endpoint deleted successfully"}), 200
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-
-#register
-
-def register_or_handle_request(path):
-    """Handles both endpoint registration and request processing dynamically."""
-    try:
-        data = request.get_json()
-        config = read_config()
-        normalized_path = normalize_path(path)
-        method = request.method.upper()
-
-        if "method" in data and "request" in data and "response" in data:
-            # Register new endpoint
-            if normalized_path not in config["endpoints"]:
-                config["endpoints"][normalized_path] = {}
-            
-            config["endpoints"][normalized_path][method] = {
-                "method": method,
-                "request_schema": data["request"],
-                "response_schema": data["response"],
-                "created_at": str(datetime.now())
-            }
-            write_config(config)
-            return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
-        
-        # Validate request schema before handling response
-        if normalized_path in config["endpoints"] and method in config["endpoints"][normalized_path]:
-            stored_data = config["endpoints"][normalized_path][method]
-            request_schema = stored_data.get("request_schema", {})
-            response_schema = stored_data.get("response_schema", {})
-            
-            # Validate request
-            request_data = request.get_json()
-            if not all(key in request_data for key in request_schema.keys()):
-                return jsonify({"status": "error", "message": "Invalid request parameters"}), 400
-            
-            dynamic_response = generate_dynamic_value(response_schema)
-            return jsonify(dynamic_response), 200
-
-        return jsonify({"status": "error", "message": f"No endpoint found for {normalized_path}"}), 404
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
