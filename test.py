@@ -39,7 +39,6 @@ def normalize_path(path):
 #                   {"role": "user", "content": prompt}]
 #     )
 #     return response["choices"][0]["message"]["content"]
-
 @app.route('/olbb-simulator/<path:path>', methods=['POST'])
 def register_endpoint(path):
     """Registers a new endpoint with request and response schemas."""
@@ -53,18 +52,29 @@ def register_endpoint(path):
             return jsonify({"status": "error", "message": "Missing request or response schema"}), 400
 
         if normalized_path not in config["endpoints"]:
-            config["endpoints"][normalized_path] = {}
+            config["endpoints"][normalized_path] = {"instances": []}
 
-        config["endpoints"][normalized_path][method] = {
+        instances = config["endpoints"][normalized_path]["instances"]
+        
+        if len(instances) == 0:
+            instance_id = None  # No UUID for first request
+        else:
+            instance_id = str(uuid.uuid4())
+        
+        new_instance = {
+            "id": instance_id,
             "method": method,
             "request_schema": data["request"],
             "response_schema": data["response"],
             "created_at": str(datetime.now())
         }
+        instances.append(new_instance)
         write_config(config)
+
         return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # @app.route('/olbb-simulator/ai/<path:path>', methods=['POST'])
 # def handle_dynamic_request(path):
