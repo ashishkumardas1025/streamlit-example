@@ -65,7 +65,14 @@ def get_all_endpoints(path):
     config = read_config()
     normalized_path = normalize_path(path)
     if normalized_path in config["endpoints"]:
-        return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]["instances"]}), 200
+        instances = config["endpoints"][normalized_path]["instances"]
+        response_data = [{
+            "id": instance["id"],
+            "path": normalized_path,
+            "request": instance["request"],
+            "response": instance["response"]
+        } for instance in instances]
+        return jsonify({"status": "success", "message": f"{len(instances)} endpoints found", "endpoints": response_data}), 200
     return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
 
 @app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['GET'])
