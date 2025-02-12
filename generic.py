@@ -1,8 +1,8 @@
-from flask import Flask, request, jsonify
 import uuid
+from datetime import datetime
+from flask import Flask, request, jsonify
 import yaml
 import os
-from datetime import datetime
 
 app = Flask(__name__)
 CONFIG_FILE = "config.yaml"
@@ -24,159 +24,105 @@ def write_config(config):
 def normalize_path(path):
     return '/' + path.strip('/')
 
-@app.route('/register', methods=['POST'])
-def register_endpoint():
-    try:
-        data = request.get_json()
-        required_fields = ["path", "method", "response"]
-        if not all(field in data for field in required_fields):
-            return jsonify({"status": "error", "message": f"Missing required fields. Required: {required_fields}"}), 400
-
-        path = normalize_path(data["path"])
-        method = data["method"].upper()
-        endpoint_id = str(uuid.uuid4())
-        config = read_config()
-        
-        if path not in config["endpoints"]:
-            config["endpoints"][path] = {}
-
-        endpoint_config = {
-            "id": endpoint_id,
-            "method": method,
-            "response": data["response"],
-            "created_at": str(datetime.now())
-        }
-        config["endpoints"][path][endpoint_id] = endpoint_config
-        write_config(config)
-
-        return jsonify({"status": "success", "message": "New endpoint registered successfully", "endpoint_id": endpoint_id}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/endpoints/<path:path>', methods=['GET'])
-def list_endpoints_by_path(path):
-    config = read_config()
-    normalized_path = normalize_path(path)
-    if normalized_path in config["endpoints"]:
-        return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]}), 200
-    return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
-
-@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['GET'])
-def get_endpoint(path, endpoint_id):
-    config = read_config()
-    normalized_path = normalize_path(path)
-    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
-        return jsonify({"status": "success", "endpoint": config["endpoints"][normalized_path][endpoint_id]}), 200
-    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
-
-@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['PUT'])
-def update_endpoint(path, endpoint_id):
+@app.route('/olbb-simulator/<path:path>', methods=['POST'])
+def register_endpoint(path):
+    """Registers a new endpoint with request and response."""
     try:
         data = request.get_json()
         config = read_config()
         normalized_path = normalize_path(path)
+        method = data.get("method", "POST").upper()
+
+        if "request" not in data or "response" not in data:
+            return jsonify({"status": "error", "message": "Missing request or response"}), 400
+
+        if normalized_path not in config["endpoints"]:
+            config["endpoints"][normalized_path] = {"instances": []}
+
+        instances = config["endpoints"][normalized_path]["instances"]
         
-        if normalized_path not in config["endpoints"] or endpoint_id not in config["endpoints"][normalized_path]:
-            return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+        for instance in instances:
+            if instance["request"] == data["request"] and instance["response"] == data["response"]:
+                return jsonify({"status": "error", "message": "Duplicate request and response"}), 400
         
-        endpoint = config["endpoints"][normalized_path][endpoint_id]
-        if "response" in data:
-            endpoint["response"] = data["response"]
-        if "method" in data:
-            endpoint["method"] = data["method"].upper()
-        endpoint["updated_at"] = str(datetime.now())
+        new_instance = {
+            "id": str(uuid.uuid4()),
+            "method": method,
+            "request": data["request"],
+            "response": data["response"],
+            "created_at": str(datetime.now())
+        }
+        instances.append(new_instance)
         write_config(config)
 
-        return jsonify({"status": "success", "message": "Endpoint updated successfully", "endpoint": endpoint}), 200
+        return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/endpoints/<path:path>/<endpoint_id>', methods=['DELETE'])
-def delete_endpoint(path, endpoint_id):
+@app.route('/olbb-simulator/<path:path>', methods=['GET'])
+def get_all_endpoints(path):
+    """Fetches all endpoint data for the given path."""
     config = read_config()
     normalized_path = normalize_path(path)
-    
-    if normalized_path in config["endpoints"] and endpoint_id in config["endpoints"][normalized_path]:
-        deleted_endpoint = config["endpoints"][normalized_path].pop(endpoint_id)
-        if not config["endpoints"][normalized_path]:
-            del config["endpoints"][normalized_path]
-        write_config(config)
-        return jsonify({"status": "success", "message": "Endpoint deleted successfully", "deleted_endpoint": deleted_endpoint}), 200
+    if normalized_path in config["endpoints"]:
+        return jsonify({"status": "success", "endpoints": config["endpoints"][normalized_path]["instances"]}), 200
+    return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
+
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['GET'])
+def get_endpoint(path, endpoint_id):
+    """Fetches a specific endpoint by ID."""
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"]:
+        for instance in config["endpoints"][normalized_path].get("instances", []):
+            if instance["id"] == endpoint_id:
+                return jsonify({"status": "success", "endpoint": instance}), 200
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
-@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def handle_request(path):
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['PUT'])
+def update_endpoint(path, endpoint_id):
+    """Updates an existing endpoint."""
     try:
+        data = request.get_json()
         config = read_config()
         normalized_path = normalize_path(path)
         
         if normalized_path in config["endpoints"]:
-            for endpoint in config["endpoints"][normalized_path].values():
-                if endpoint["method"] == request.method:
-                    return jsonify(endpoint["response"]), 200
-        
-        return jsonify({"status": "error", "message": f"No endpoint found for {request.method} {normalized_path}"}), 404
+            for instance in config["endpoints"][normalized_path].get("instances", []):
+                if instance["id"] == endpoint_id:
+                    instance.update(data)
+                    instance["updated_at"] = str(datetime.now())
+                    write_config(config)
+                    return jsonify({"status": "success", "message": "Endpoint updated successfully", "endpoint": instance}), 200
+        return jsonify({"status": "error", "message": "Endpoint not found"}), 404
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/olbb-simulator/<path:path>', methods=['DELETE'])
+def delete_all_endpoints(path):
+    """Deletes all instances for a given path."""
+    config = read_config()
+    normalized_path = normalize_path(path)
+    if normalized_path in config["endpoints"]:
+        del config["endpoints"][normalized_path]
+        write_config(config)
+        return jsonify({"status": "success", "message": "All endpoints deleted for the given path"}), 200
+    return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
+
+@app.route('/olbb-simulator/<path:path>/<endpoint_id>', methods=['DELETE'])
+def delete_endpoint(path, endpoint_id):
+    """Deletes a specific endpoint instance."""
+    config = read_config()
+    normalized_path = normalize_path(path)
+    
+    if normalized_path in config["endpoints"]:
+        instances = config["endpoints"][normalized_path].get("instances", [])
+        for i, instance in enumerate(instances):
+            if instance["id"] == endpoint_id:
+                del instances[i]
+                write_config(config)
+                return jsonify({"status": "success", "message": "Endpoint deleted successfully"}), 200
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-
-
-@app.route('/register', methods=['POST'])
-def register_endpoint():
-    try:
-        data = request.get_json()
-        required_fields = ["path", "method", "response"]
-        if not all(field in data for field in required_fields):
-            return jsonify({
-                "status": "error",
-                "message": f"Missing required fields. Required: {required_fields}"
-            }), 400
-
-        path = normalize_path(data["path"])
-        method = data["method"].upper()
-        config = read_config()
-
-        # Check if the path already exists in config.yaml
-        if path in config["endpoints"]:
-            # Check if an endpoint with the same method already exists
-            for endpoint_id, endpoint in config["endpoints"][path].items():
-                if endpoint["method"] == method:
-                    return jsonify({
-                        "status": "error",
-                        "message": "Endpoint already exists",
-                        "endpoint_id": endpoint_id
-                    }), 409  # HTTP 409 Conflict
-
-        # Generate a new UUID since the endpoint is not already registered
-        endpoint_id = str(uuid.uuid4())
-
-        # If the path does not exist, create it
-        if path not in config["endpoints"]:
-            config["endpoints"][path] = {}
-
-        # Register the new endpoint
-        endpoint_config = {
-            "id": endpoint_id,
-            "method": method,
-            "response": data["response"],
-            "created_at": str(datetime.now())
-        }
-        config["endpoints"][path][endpoint_id] = endpoint_config
-        write_config(config)
-
-        return jsonify({
-            "status": "success",
-            "message": "New endpoint registered successfully",
-            "endpoint_id": endpoint_id
-        }), 201  # HTTP 201 Created
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
