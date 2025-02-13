@@ -133,3 +133,72 @@ def delete_endpoint(path, endpoint_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+
+
+def handle_dynamic_request_response(path):
+    """Handles request and response schema-based dynamic generation and stores results."""
+    try:
+        config = read_config()
+        normalized_path = normalize_path(path)
+
+        if normalized_path not in config["endpoints"]:
+            return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
+
+        endpoint_id = str(uuid.uuid4())
+        instances = config["endpoints"][normalized_path].get("instances", [])
+        
+        if not instances:
+            return jsonify({"status": "error", "message": "No schema instances found for this path"}), 404
+
+        generated_data = []
+        
+        for instance in instances:
+            request_schema = instance.get("request_schema")
+            response_schema = instance.get("response_schema")
+            
+            if not request_schema or not response_schema:
+                continue
+                
+            # Generate data with explicit error logging
+            print(f"Generating request for schema: {json.dumps(request_schema)}")
+            generated_request = generate_dynamic_value(request_schema, "request")
+            print(f"Generated request: {json.dumps(generated_request)}")
+            
+            print(f"Generating response for schema: {json.dumps(response_schema)}")
+            generated_response = generate_dynamic_value(response_schema, "response")
+            print(f"Generated response: {json.dumps(generated_response)}")
+
+            new_instance = {
+                "id": endpoint_id,
+                "method": "POST",
+                "generated_request": generated_request,
+                "generated_response": generated_response,
+                "created_at": str(datetime.now())
+            }
+            
+            instances.append(new_instance)
+            generated_data.append({
+                "id": endpoint_id,
+                "request": generated_request,
+                "response": generated_response,
+                "timestamp": str(datetime.now())
+            })
+
+        if generated_data:
+            write_config(config)
+            return jsonify({
+                "status": "success",
+                "message": f"{len(generated_data)} dynamic request-response pairs generated",
+                "data": generated_data
+            }), 200
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "No data could be generated. Check if schemas are properly defined."
+            }), 400
+
+    except Exception as e:
+        print(f"Error in handle_dynamic_request_response: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
