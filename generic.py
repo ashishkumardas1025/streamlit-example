@@ -137,68 +137,57 @@ if __name__ == '__main__':
 
 
 
-def handle_dynamic_request_response(path):
-    """Handles request and response schema-based dynamic generation and stores results."""
+#validation
+def validate_schema(expected_schema, actual_data):
+    """Validates if all required fields exist in the actual data."""
+    missing_fields = [field for field in expected_schema if field not in actual_data]
+    if missing_fields:
+        return False, f"Missing required fields: {', '.join(missing_fields)}"
+    return True, None
+
+@app.route('/olbb-simulator/<path:path>', methods=['POST'])
+def register_endpoint(path):
+    """Registers a new endpoint with request and response validation."""
     try:
+        data = request.get_json()
         config = read_config()
         normalized_path = normalize_path(path)
+        method = data.get("method", "POST").upper()
+
+        if "request" not in data or "response" not in data:
+            return jsonify({"status": "error", "message": "Missing request or response"}), 400
 
         if normalized_path not in config["endpoints"]:
-            return jsonify({"status": "error", "message": "No endpoints found for the given path"}), 404
+            config["endpoints"][normalized_path] = {"instances": []}
 
-        endpoint_id = str(uuid.uuid4())
-        instances = config["endpoints"][normalized_path].get("instances", [])
-        
-        if not instances:
-            return jsonify({"status": "error", "message": "No schema instances found for this path"}), 404
+        instances = config["endpoints"][normalized_path]["instances"]
 
-        generated_data = []
-        
+        # Validate request & response schema fields
         for instance in instances:
-            request_schema = instance.get("request_schema")
-            response_schema = instance.get("response_schema")
-            
-            if not request_schema or not response_schema:
-                continue
-                
-            # Generate data with explicit error logging
-            print(f"Generating request for schema: {json.dumps(request_schema)}")
-            generated_request = generate_dynamic_value(request_schema, "request")
-            print(f"Generated request: {json.dumps(generated_request)}")
-            
-            print(f"Generating response for schema: {json.dumps(response_schema)}")
-            generated_response = generate_dynamic_value(response_schema, "response")
-            print(f"Generated response: {json.dumps(generated_response)}")
+            if instance["request"] == data["request"] and instance["response"] == data["response"]:
+                return jsonify({"status": "error", "message": "Duplicate request and response"}), 400
 
-            new_instance = {
-                "id": endpoint_id,
-                "method": "POST",
-                "generated_request": generated_request,
-                "generated_response": generated_response,
-                "created_at": str(datetime.now())
-            }
-            
-            instances.append(new_instance)
-            generated_data.append({
-                "id": endpoint_id,
-                "request": generated_request,
-                "response": generated_response,
-                "timestamp": str(datetime.now())
-            })
+            # Check for missing fields
+            is_valid_request, request_error = validate_schema(instance["request"], data["request"])
+            is_valid_response, response_error = validate_schema(instance["response"], data["response"])
 
-        if generated_data:
-            write_config(config)
-            return jsonify({
-                "status": "success",
-                "message": f"{len(generated_data)} dynamic request-response pairs generated",
-                "data": generated_data
-            }), 200
-        else:
-            return jsonify({
-                "status": "error",
-                "message": "No data could be generated. Check if schemas are properly defined."
-            }), 400
+            if not is_valid_request:
+                return jsonify({"status": "error", "message": request_error}), 400
+            if not is_valid_response:
+                return jsonify({"status": "error", "message": response_error}), 400
 
+        # Store new request-response pair if validation passes
+        new_instance = {
+            "id": str(uuid.uuid4()),
+            "method": method,
+            "request": data["request"],
+            "response": data["response"],
+            "created_at": str(datetime.now())
+        }
+        instances.append(new_instance)
+        write_config(config)
+
+        return jsonify({"status": "success", "message": "New endpoint registered successfully"}), 200
     except Exception as e:
-        print(f"Error in handle_dynamic_request_response: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
