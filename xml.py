@@ -144,82 +144,96 @@ if __name__ == '__main__':
 #sample post
 import uuid
 import xmltodict
+from datetime import datetime
+from flask import Flask, request, jsonify
 import yaml
 import os
-from datetime import datetime
-from flask import Flask, request, Response
 
 app = Flask(__name__)
 CONFIG_FILE = "config.yaml"
 
 def create_empty_yaml():
-    """Creates an empty config file if not exists."""
+    """Ensures the config file exists."""
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w") as f:
-            yaml.dump({"endpoints": {}}, f)
+            yaml.dump({"xml_endpoints": {}}, f)
 
 def read_config():
-    """Reads the config file."""
+    """Reads the configuration file."""
     create_empty_yaml()
     with open(CONFIG_FILE, "r") as f:
-        return yaml.safe_load(f) or {"endpoints": {}}
+        return yaml.safe_load(f) or {"xml_endpoints": {}}
 
 def write_config(config):
-    """Writes data to the config file."""
+    """Writes to the configuration file."""
     with open(CONFIG_FILE, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
 
-@app.route('/olbb-simulator/xml/register', methods=['POST'])
-def register_generic_xml():
-    """Handles generic XML requests and stores them in config.yaml."""
+def normalize_path(path):
+    """Standardizes path format."""
+    return '/' + path.strip('/')
+
+@app.route('/olbb-simulator/xml/<path:path>', methods=['POST'])
+def register_generic_xml(path):
+    """Registers a generic XML-based request and response under a given path."""
     try:
-        # Parse XML from request
-        xml_data = request.data.decode("utf-8")
-        parsed_data = xmltodict.parse(xml_data)
+        # Read XML data from request body
+        xml_data = request.data.decode('utf-8')
+        parsed_data = xmltodict.parse(xml_data)  # Convert XML to dict
 
-        # Extract root tag (e.g., OrderInfo, LoanApplication)
-        root_tag = list(parsed_data.keys())[0]
-        data = parsed_data[root_tag]
+        # Dynamically identify the root node
+        root_key = list(parsed_data.keys())[0]  # Get the first key (root)
+        if root_key not in parsed_data:
+            return jsonify({"status": "error", "message": "Invalid XML format"}), 400
 
-        # Ensure the XML contains both Request and Response
-        if "Request" not in data or "Response" not in data:
-            return Response("<Error>Invalid XML Format: Missing Request or Response</Error>", status=400, mimetype="application/xml")
+        root_content = parsed_data[root_key]
 
-        request_data = data["Request"]
-        response_data = data["Response"]
+        # Ensure request and response parts exist dynamically
+        request_data = None
+        response_data = None
 
+        for key, value in root_content.items():
+            if "request" in key.lower():
+                request_data = value
+            elif "response" in key.lower():
+                response_data = value
+
+        if not request_data or not response_data:
+            return jsonify({"status": "error", "message": "XML must contain both <Request> and <Response> sections"}), 400
+
+        # Load config and normalize path
         config = read_config()
-        endpoint_id = str(uuid.uuid4())
+        normalized_path = normalize_path(path)
 
-        # Check for duplicates
-        for existing_endpoint in config["endpoints"].values():
-            if existing_endpoint["request"] == request_data and existing_endpoint["response"] == response_data:
-                return Response("<Error>Duplicate Entry</Error>", status=400, mimetype="application/xml")
+        # Initialize path if not present
+        if normalized_path not in config["xml_endpoints"]:
+            config["xml_endpoints"][normalized_path] = {"instances": []}
 
-        # Store request & response in config file
-        config["endpoints"][endpoint_id] = {
-            "id": endpoint_id,
-            "root_tag": root_tag,
+        instances = config["xml_endpoints"][normalized_path]["instances"]
+
+        # Check for duplicate request-response pairs
+        for instance in instances:
+            if instance["request"] == request_data and instance["response"] == response_data:
+                return jsonify({"status": "error", "message": "Duplicate request and response"}), 400
+
+        # Generate unique ID for this registration
+        new_instance = {
+            "id": str(uuid.uuid4()),
+            "method": "POST",
             "request": request_data,
             "response": response_data,
             "created_at": str(datetime.now())
         }
+
+        # Store in config
+        instances.append(new_instance)
         write_config(config)
 
-        # Success Response
-        success_xml = f"""<Response>
-                            <Status>Success</Status>
-                            <Message>Request registered successfully</Message>
-                            <EndpointID>{endpoint_id}</EndpointID>
-                        </Response>"""
-        return Response(success_xml, status=200, mimetype="application/xml")
-
+        return jsonify({"status": "success", "message": "XML endpoint registered successfully", "id": new_instance["id"]}), 200
+    
     except Exception as e:
-        error_xml = f"<Error>Server Error: {str(e)}</Error>"
-        return Response(error_xml, status=500, mimetype="application/xml")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-if __name__ == "__main__":
-    app.run(debug=True)
 
 
 
