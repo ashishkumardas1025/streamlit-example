@@ -1,16 +1,12 @@
-{
-  "path": "/pet-registration",
-  "method": "POST",
-  "request": {
-    "pet_name": "string",
-    "pet_type": "string",
-    "age": "integer",
-    "owner_name": "string",
-    "owner_contact": "string"
-  },
-  "response": {
-    "message": "Pet registered successfully",
-    "registration_id": "12345"
-  }
-}
+# GitHub Copilot vs. Amazon Bedrock Models Comparison
 
+| Tasks | GitHub Copilot | Amazon Bedrock | Time Savings | Accuracy | Pros | Cons |
+|-------|---------------|----------------|--------------|----------|------|------|
+| Code generation | High efficiency | Medium efficiency | Copilot: 40-60%<br>Bedrock: 30-45% | Copilot: High<br>Bedrock: Medium | **Copilot**: Specialized for code, integrates with IDEs<br>**Bedrock**: More versatile for multiple use cases | **Copilot**: Limited to coding tasks<br>**Bedrock**: Less specialized for development workflows |
+| Code completion | Very high | Medium | Copilot: 50-70%<br>Bedrock: 30-50% | Copilot: High<br>Bedrock: Medium | **Copilot**: Context-aware, adapts to coding style<br>**Bedrock**: Requires more explicit prompting | **Copilot**: Can suggest incorrect patterns<br>**Bedrock**: Less tailored to specific language idioms |
+| Documentation generation | Medium | High | Copilot: 30-45%<br>Bedrock: 40-60% | Copilot: Medium<br>Bedrock: High | **Copilot**: Inline documentation<br>**Bedrock**: Better for comprehensive docs | **Copilot**: Brief comments<br>**Bedrock**: Requires more setup |
+| Bug fixing | High | Medium | Copilot: 30-50%<br>Bedrock: 20-40% | Copilot: Medium-High<br>Bedrock: Medium | **Copilot**: Suggests fixes in context<br>**Bedrock**: Better explanations of issues | **Copilot**: May miss complex bugs<br>**Bedrock**: Less integrated with development environment |
+| Refactoring | Medium-High | Low-Medium | Copilot: 30-50%<br>Bedrock: 15-30% | Copilot: Medium<br>Bedrock: Low-Medium | **Copilot**: Good for routine refactoring<br>**Bedrock**: Better for explaining refactoring concepts | **Copilot**: May not maintain all functionality<br>**Bedrock**: Less code-specific knowledge |
+| API usage | High | Medium | Copilot: 40-60%<br>Bedrock: 25-40% | Copilot: High<br>Bedrock: Medium | **Copilot**: Excellent for common libraries<br>**Bedrock**: Better for explaining API concepts | **Copilot**: May use deprecated methods<br>**Bedrock**: Less aware of API specifics |
+| Test generation | Medium-High | Medium | Copilot: 30-50%<br>Bedrock: 25-40% | Copilot: Medium<br>Bedrock: Medium | **Copilot**: Good for unit tests<br>**Bedrock**: Better for test strategies | **Copilot**: May miss edge cases<br>**Bedrock**: Tests may require more modification |
+| Natural language processing | Low | High | Copilot: 10-20%<br>Bedrock: 40-60% | Copilot: Low<br>Bedrock: High | **Copilot**: Basic NLP for code comments<br>**Bedrock**: Advanced text analysis | **Copilot**: Limited to code context<br>**Bedrock**: Not specialized for development |
